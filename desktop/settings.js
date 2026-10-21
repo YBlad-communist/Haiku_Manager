@@ -7,6 +7,7 @@ const DEFAULTS = {
   hotkey: "CommandOrControl+Space",
   autostart: false,
   budget_limit_rub: 500,
+  voice_language: "ru",
   allowed_folders: [],
   allowed_apps: [],
 };
@@ -46,10 +47,14 @@ function sanitizeSettings(value, base = DEFAULTS) {
     budget = base.budget_limit_rub;
   }
   budget = Math.min(1_000_000, Math.max(0, Math.round(budget * 100) / 100));
+  const voiceLanguage = ["ru", "en", "auto"].includes(source.voice_language)
+    ? source.voice_language
+    : base.voice_language || "ru";
   return {
     hotkey,
     autostart: Boolean(source.autostart),
     budget_limit_rub: budget,
+    voice_language: voiceLanguage,
     allowed_folders: cleanStringList(source.allowed_folders),
     allowed_apps: cleanStringList(source.allowed_apps),
   };

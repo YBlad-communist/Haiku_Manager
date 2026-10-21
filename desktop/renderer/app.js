@@ -15,6 +15,20 @@ const state = {
   settingsOpen: false,
   recordingHotkey: false,
   settingsBusy: false,
+  voiceToken: 0,
+  voiceRecording: false,
+  voiceBusy: false,
+  voiceChunks: [],
+  voiceRecorder: null,
+  voiceStream: null,
+  voiceAudioContext: null,
+  voiceAnalyser: null,
+  voiceMeterSource: null,
+  voiceMeterSink: null,
+  voiceMeterFrame: 0,
+  voiceTimer: null,
+  voiceStartedAt: 0,
+  voiceAbort: null,
 };
 
 let currentCard = null;
@@ -55,7 +69,25 @@ const els = {
   hotkeyInput: document.getElementById("hotkeyInput"),
   autostartToggle: document.getElementById("autostartToggle"),
   budgetInput: document.getElementById("budgetInput"),
+  voiceLanguage: document.getElementById("voiceLanguage"),
+  voiceCircle: document.getElementById("voiceCircle"),
+  voiceBars: document.getElementById("voiceBars"),
+  voiceTitle: document.getElementById("voiceTitle"),
+  voiceText: document.getElementById("voiceText"),
+  voiceTimer: document.getElementById("voiceTimer"),
+  voiceHint: document.getElementById("voiceHint"),
+  voiceStop: document.getElementById("voiceStop"),
+  voiceRetry: document.getElementById("voiceRetry"),
+  voiceCancel: document.getElementById("voiceCancel"),
 };
+
+const VOICE_MAX_MS = 60_000;
+const VOICE_MIN_BYTES = 800;
+const VOICE_MIME_TYPES = [
+  "audio/webm;codecs=opus",
+  "audio/webm",
+  "audio/ogg;codecs=opus",
+];
 
 const TOOL_LABELS = {
   search_web: "Ищу в интернете",
@@ -748,6 +780,9 @@ async function refreshSummary() {
 }
 
 function openConfirm(event) {
+  if (!els.voice.hidden) {
+    closeVoice();
+  }
   state.pending = event;
   state.editing = false;
   state.modalBusy = false;
@@ -852,13 +887,15 @@ function trapFocus(event) {
     ? els.modal
     : !els.settings.hidden
       ? els.settings
-      : null;
+      : !els.voice.hidden
+        ? els.voice
+        : null;
   if (!scope) {
     return;
   }
   const focusable = Array.from(
     scope.querySelectorAll(
-      "button, textarea, input, [tabindex]:not([tabindex='-1'])",
+      "button, textarea, input, select, [tabindex]:not([tabindex='-1'])",
     ),
   ).filter(
     (node) =>
@@ -880,16 +917,435 @@ function trapFocus(event) {
   }
 }
 
-function openVoice() {
+function formatVoiceDuration(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
+function resetVoiceBars() {
+  for (const bar of els.voiceBars.querySelectorAll(".bar")) {
+    bar.style.transform = "";
+  }
+}
+
+function setVoiceMode(mode, message = "") {
+  const titles = {
+    starting: "Подключаю…",
+    recording: "Слушаю…",
+    processing: "Распознаю…",
+    error: "Не получилось",
+  };
+  const texts = {
+    starting: "Подключаю микрофон…",
+    recording: "Говори, я запишу.",
+    processing: "Разбираю запись…",
+  };
+  const hints = {
+    starting: "Разреши доступ к микрофону · Esc — отмена",
+    recording: "Максимум 60 секунд · Esc — отмена",
+    processing: "Обработка на этом компьютере",
+    error: "Проверь микрофон и попробуй ещё раз",
+  };
+  els.voiceTitle.textContent = titles[mode] || "Голос";
+  els.voiceText.classList.toggle("error", mode === "error");
+  els.voiceText.textContent = mode === "error" ? message : texts[mode] || "";
+  els.voiceHint.textContent = hints[mode] || "";
+  els.voiceCircle.classList.toggle("listening", mode === "recording");
+  els.voiceStop.hidden = mode === "error";
+  els.voiceStop.disabled = mode !== "recording";
+  els.voiceStop.textContent =
+    mode === "recording" ? "Остановить" : mode === "starting" ? "Подожди" : "Распознаю…";
+  els.voiceRetry.hidden = mode !== "error";
+  els.voiceCancel.textContent =
+    mode === "processing" || mode === "error" ? "Закрыть" : "Отмена";
+  els.voiceTimer.hidden = mode === "error";
+}
+
+function stopVoiceStream(stream) {
+  if (!stream) {
+    return;
+  }
+  for (const track of stream.getTracks()) {
+    try {
+      track.stop();
+    } catch {
+      // Дорожка уже остановлена.
+    }
+  }
+}
+
+function stopVoiceTimer() {
+  if (state.voiceTimer) {
+    clearInterval(state.voiceTimer);
+    state.voiceTimer = null;
+  }
+}
+
+function stopVoiceMeter() {
+  if (state.voiceMeterFrame) {
+    cancelAnimationFrame(state.voiceMeterFrame);
+    state.voiceMeterFrame = 0;
+  }
+  if (state.voiceMeterSource) {
+    try {
+      state.voiceMeterSource.disconnect();
+    } catch {
+      // Источник уже отключён.
+    }
+    state.voiceMeterSource = null;
+  }
+  if (state.voiceMeterSink) {
+    try {
+      state.voiceMeterSink.disconnect();
+    } catch {
+      // Приёмник уже отключён.
+    }
+    state.voiceMeterSink = null;
+  }
+  state.voiceAnalyser = null;
+  if (state.voiceAudioContext) {
+    state.voiceAudioContext.close().catch(() => {});
+    state.voiceAudioContext = null;
+  }
+  resetVoiceBars();
+}
+
+function cleanupVoiceMedia() {
+  const recorder = state.voiceRecorder;
+  state.voiceRecorder = null;
+  if (recorder) {
+    recorder.ondataavailable = null;
+    recorder.onstop = null;
+    recorder.onerror = null;
+    try {
+      if (recorder.state !== "inactive") {
+        recorder.stop();
+      }
+    } catch {
+      // Запись уже остановлена.
+    }
+  }
+  stopVoiceStream(state.voiceStream);
+  state.voiceStream = null;
+  stopVoiceMeter();
+}
+
+function pickVoiceMime() {
+  if (typeof MediaRecorder === "undefined") {
+    return "";
+  }
+  return (
+    VOICE_MIME_TYPES.find((type) => MediaRecorder.isTypeSupported(type)) || ""
+  );
+}
+
+function startVoiceMeter(stream) {
+  stopVoiceMeter();
+  const AudioCtor = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtor) {
+    return;
+  }
+  const context = new AudioCtor();
+  const source = context.createMediaStreamSource(stream);
+  const analyser = context.createAnalyser();
+  analyser.fftSize = 256;
+  analyser.smoothingTimeConstant = 0.75;
+  const sink = context.createGain();
+  sink.gain.value = 0;
+  source.connect(analyser);
+  analyser.connect(sink);
+  sink.connect(context.destination);
+  state.voiceAudioContext = context;
+  state.voiceAnalyser = analyser;
+  state.voiceMeterSource = source;
+  state.voiceMeterSink = sink;
+  context.resume().catch(() => {});
+  const bars = Array.from(els.voiceBars.querySelectorAll(".bar"));
+  const data = new Uint8Array(analyser.fftSize);
+  const tick = () => {
+    if (!state.voiceAnalyser) {
+      return;
+    }
+    analyser.getByteTimeDomainData(data);
+    let peak = 0;
+    for (const value of data) {
+      peak = Math.max(peak, Math.abs(value - 128) / 128);
+    }
+    const level = Math.min(1, peak * 3.5);
+    bars.forEach((bar, index) => {
+      const idle = Math.sin(performance.now() / 240 + index * 1.3) * 0.08;
+      const wave = Math.sin(performance.now() / 130 + index * 1.7);
+      const factor = 0.25 + idle + level * (0.75 + wave * 0.15);
+      bar.style.transform = `scaleY(${Math.max(0.15, factor).toFixed(2)})`;
+    });
+    state.voiceMeterFrame = requestAnimationFrame(tick);
+  };
+  tick();
+}
+
+function startVoiceTimer(token) {
+  stopVoiceTimer();
+  state.voiceStartedAt = performance.now();
+  const tick = () => {
+    if (token !== state.voiceToken || !state.voiceRecording) {
+      return;
+    }
+    const elapsed = performance.now() - state.voiceStartedAt;
+    els.voiceTimer.textContent = formatVoiceDuration(elapsed);
+    if (elapsed >= VOICE_MAX_MS) {
+      stopVoiceRecording(token);
+    }
+  };
+  tick();
+  state.voiceTimer = setInterval(tick, 200);
+}
+
+function insertVoiceText(text) {
+  const current = els.input.value.trim();
+  els.input.value = current ? `${current} ${text}` : text;
+  const end = els.input.value.length;
+  els.input.setSelectionRange(end, end);
+  els.input.focus();
+}
+
+function handleVoiceError(token, message) {
+  if (token !== state.voiceToken) {
+    return;
+  }
+  state.voiceRecording = false;
+  state.voiceBusy = false;
+  stopVoiceTimer();
+  cleanupVoiceMedia();
+  state.voiceChunks = [];
+  setVoiceMode("error", message || "Не удалось записать голос.");
+}
+
+async function transcribeVoiceBlob(blob, token) {
+  const controller = new AbortController();
+  state.voiceAbort = controller;
+  const language = state.settings?.voice_language || "ru";
+  try {
+    const response = await fetch(
+      api(`/api/transcribe?language=${encodeURIComponent(language)}`),
+      {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": blob.type || "audio/webm" }),
+        body: blob,
+        signal: controller.signal,
+      },
+    );
+    let data = {};
+    try {
+      data = await response.json();
+    } catch {
+      data = {};
+    }
+    if (token !== state.voiceToken) {
+      return;
+    }
+    if (!response.ok) {
+      throw new Error(data.error || `Сервер ответил ${response.status}.`);
+    }
+    const text = String(data.text || "").trim();
+    if (!text) {
+      throw new Error("Речь не распознана.");
+    }
+    insertVoiceText(text);
+    closeVoice();
+    showToast("Голос распознан.");
+  } catch (error) {
+    if (error.name === "AbortError" || token !== state.voiceToken) {
+      return;
+    }
+    handleVoiceError(token, error.message || "Не удалось распознать речь.");
+  } finally {
+    if (state.voiceAbort === controller) {
+      state.voiceAbort = null;
+    }
+  }
+}
+
+async function finishVoiceRecording(token) {
+  if (token !== state.voiceToken) {
+    return;
+  }
+  const chunks = state.voiceChunks.slice();
+  state.voiceChunks = [];
+  const recorder = state.voiceRecorder;
+  const type = (recorder && recorder.mimeType) || (chunks[0] && chunks[0].type) || "audio/webm";
+  state.voiceRecorder = null;
+  stopVoiceTimer();
+  stopVoiceMeter();
+  stopVoiceStream(state.voiceStream);
+  state.voiceStream = null;
+  if (!chunks.length) {
+    handleVoiceError(token, "Запись пустая. Попробуй ещё раз.");
+    return;
+  }
+  const blob = new Blob(chunks, { type });
+  if (blob.size < VOICE_MIN_BYTES) {
+    handleVoiceError(token, "Запись слишком короткая. Попробуй ещё раз.");
+    return;
+  }
+  await transcribeVoiceBlob(blob, token);
+}
+
+function stopVoiceRecording(token = state.voiceToken) {
+  if (token !== state.voiceToken || !state.voiceRecording) {
+    return;
+  }
+  state.voiceRecording = false;
+  state.voiceBusy = true;
+  stopVoiceTimer();
+  stopVoiceMeter();
+  setVoiceMode("processing");
+  const recorder = state.voiceRecorder;
+  if (!recorder || recorder.state === "inactive") {
+    finishVoiceRecording(token);
+    return;
+  }
+  try {
+    recorder.stop();
+  } catch {
+    handleVoiceError(token, "Не удалось остановить запись.");
+  }
+}
+
+async function startVoiceRecording(token) {
+  if (token !== state.voiceToken) {
+    return;
+  }
+  cleanupVoiceMedia();
+  state.voiceChunks = [];
+  state.voiceRecording = false;
+  state.voiceBusy = false;
+  els.voiceTimer.textContent = "0:00";
+  setVoiceMode("starting");
+  try {
+    if (
+      !navigator.mediaDevices ||
+      typeof navigator.mediaDevices.getUserMedia !== "function"
+    ) {
+      throw new Error("Микрофон недоступен в этом окне.");
+    }
+    if (typeof MediaRecorder === "undefined") {
+      throw new Error("Запись звука не поддерживается.");
+    }
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+      video: false,
+    });
+    if (token !== state.voiceToken) {
+      stopVoiceStream(stream);
+      return;
+    }
+    state.voiceStream = stream;
+    const mimeType = pickVoiceMime();
+    const options = { audioBitsPerSecond: 64000 };
+    if (mimeType) {
+      options.mimeType = mimeType;
+    }
+    const recorder = new MediaRecorder(stream, options);
+    state.voiceRecorder = recorder;
+    recorder.addEventListener("dataavailable", (event) => {
+      if (token === state.voiceToken && event.data && event.data.size) {
+        state.voiceChunks.push(event.data);
+      }
+    });
+    recorder.addEventListener("error", (event) => {
+      if (token === state.voiceToken) {
+        handleVoiceError(
+          token,
+          (event.error && event.error.message) || "Ошибка записи звука.",
+        );
+      }
+    });
+    recorder.addEventListener("stop", () => {
+      if (token === state.voiceToken) {
+        finishVoiceRecording(token);
+      }
+    });
+    recorder.start(250);
+    state.voiceRecording = true;
+    setVoiceMode("recording");
+    startVoiceMeter(stream);
+    startVoiceTimer(token);
+  } catch (error) {
+    if (token !== state.voiceToken) {
+      return;
+    }
+    let message = "Не удалось включить микрофон.";
+    if (error && (error.name === "NotAllowedError" || error.name === "SecurityError")) {
+      message = "Доступ к микрофону запрещён. Разреши его в Windows и попробуй снова.";
+    } else if (
+      error &&
+      (error.name === "NotFoundError" || error.name === "DevicesNotFoundError")
+    ) {
+      message = "Микрофон не найден. Подключи его и попробуй снова.";
+    } else if (
+      error &&
+      (error.name === "NotReadableError" || error.name === "TrackStartError")
+    ) {
+      message = "Микрофон занят другой программой.";
+    } else if (error && error.message) {
+      message = error.message;
+    }
+    handleVoiceError(token, message);
+  }
+}
+
+async function openVoice() {
+  if (!els.voice.hidden) {
+    return;
+  }
+  if (!els.modal.hidden) {
+    showToast("Сначала ответь на подтверждение.");
+    return;
+  }
+  if (state.settingsOpen) {
+    showToast("Сначала закрой настройки.");
+    return;
+  }
+  state.voiceToken += 1;
+  const token = state.voiceToken;
   els.voice.hidden = false;
   syncInert();
   els.voice.focus();
+  await startVoiceRecording(token);
 }
 
 function closeVoice() {
+  if (els.voice.hidden) {
+    return;
+  }
+  state.voiceToken += 1;
+  if (state.voiceAbort) {
+    state.voiceAbort.abort();
+    state.voiceAbort = null;
+  }
+  state.voiceRecording = false;
+  state.voiceBusy = false;
+  stopVoiceTimer();
+  cleanupVoiceMedia();
+  state.voiceChunks = [];
   els.voice.hidden = true;
   syncInert();
   els.input.focus();
+}
+
+async function retryVoice() {
+  if (state.voiceBusy) {
+    return;
+  }
+  state.voiceToken += 1;
+  const token = state.voiceToken;
+  state.voiceChunks = [];
+  await startVoiceRecording(token);
 }
 
 const HOTKEY_LABELS = {
@@ -1007,6 +1463,12 @@ function applySettingsToUi() {
   els.autostartToggle.classList.toggle("on", autostart);
   if (document.activeElement !== els.budgetInput) {
     els.budgetInput.value = String(state.settings.budget_limit_rub);
+  }
+  const voiceLanguage = ["ru", "en", "auto"].includes(state.settings.voice_language)
+    ? state.settings.voice_language
+    : "ru";
+  if (document.activeElement !== els.voiceLanguage) {
+    els.voiceLanguage.value = voiceLanguage;
   }
 }
 
@@ -1150,6 +1612,28 @@ async function saveBudget() {
   }
 }
 
+async function saveVoiceLanguage() {
+  if (!state.settings || state.settingsBusy) {
+    return;
+  }
+  const value = els.voiceLanguage.value;
+  if (!["ru", "en", "auto"].includes(value)) {
+    applySettingsToUi();
+    return;
+  }
+  if (value === state.settings.voice_language) {
+    return;
+  }
+  state.settingsBusy = true;
+  const ok = await saveSettingsPatch({ voice_language: value });
+  state.settingsBusy = false;
+  if (ok) {
+    showToast("Язык голосового ввода сохранён.");
+  } else {
+    applySettingsToUi();
+  }
+}
+
 function handleSettingsChanged(settings) {
   if (!settings) {
     return;
@@ -1184,6 +1668,9 @@ function bindEvents() {
   });
 
   els.mic.addEventListener("click", openVoice);
+  els.voiceStop.addEventListener("click", () => stopVoiceRecording());
+  els.voiceRetry.addEventListener("click", retryVoice);
+  els.voiceCancel.addEventListener("click", closeVoice);
 
   els.voice.addEventListener("click", (event) => {
     if (event.target === els.voice) {
@@ -1243,6 +1730,7 @@ function bindEvents() {
     }
   });
   els.budgetInput.addEventListener("blur", saveBudget);
+  els.voiceLanguage.addEventListener("change", saveVoiceLanguage);
 
   document.addEventListener("keydown", (event) => {
     if (event.key === "Tab") {
@@ -1295,6 +1783,12 @@ function bindEvents() {
     if (link) {
       event.preventDefault();
       window.omega.openExternal(link.href);
+    }
+  });
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden && !els.voice.hidden) {
+      closeVoice();
     }
   });
 

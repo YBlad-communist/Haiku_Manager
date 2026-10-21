@@ -3,11 +3,13 @@
 # Задачу выполняет отдельный процесс worker.py, поэтому «Стоп» убивает только его.
 
 import asyncio
+import io
 import json
 import os
 import secrets
 import socket
 import sys
+import threading
 import uuid
 from collections import deque
 from contextlib import suppress
@@ -24,6 +26,24 @@ from pydantic import BaseModel
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RENDERER_DIR = Path(__file__).resolve().parents[1] / "renderer"
 WORKER_PATH = Path(__file__).with_name("worker.py")
+
+MAX_AUDIO_BYTES = 10 * 1024 * 1024
+MAX_AUDIO_SECONDS = 60.0
+VOICE_LANGUAGES = ("ru", "en", "auto")
+_whisper_model = None
+_whisper_lock = threading.Lock()
+
+
+class AudioTooLong(Exception):
+    pass
+
+
+class EmptySpeech(Exception):
+    pass
+
+
+class SpeechUnavailable(Exception):
+    pass
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -89,6 +109,122 @@ def _budget_limit() -> float:
         return max(0.0, value)
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return 500.0
+
+
+def _voice_language() -> str:
+    override = os.environ.get("OMEGA_VOICE_LANGUAGE")
+    if override in VOICE_LANGUAGES:
+        return override
+    try:
+        data = json.loads(_settings_path().read_text(encoding="utf-8"))
+        value = str(data.get("voice_language", "ru"))
+        if value in VOICE_LANGUAGES:
+            return value
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        pass
+    return "ru"
+
+
+def _load_whisper_model():
+    global _whisper_model
+    with _whisper_lock:
+        if _whisper_model is not None:
+            return _whisper_model
+        try:
+            from faster_whisper import WhisperModel
+        except Exception as exc:  # noqa: BLE001
+            raise SpeechUnavailable(
+                "Распознавание речи не установлено. Установи faster-whisper."
+            ) from exc
+        model_name = os.environ.get("OMEGA_WHISPER_MODEL", "small")
+        model_root = Path(
+            os.environ.get("OMEGA_MODEL_DIR") or (PROJECT_ROOT / "data" / "models")
+        )
+        try:
+            model_root.mkdir(parents=True, exist_ok=True)
+            _whisper_model = WhisperModel(
+                model_name,
+                device="cpu",
+                compute_type="int8",
+                download_root=str(model_root),
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise SpeechUnavailable(
+                "Не удалось подготовить модель распознавания речи. "
+                "Проверь интернет и свободное место."
+            ) from exc
+        return _whisper_model
+
+
+def _decode_audio(data: bytes):
+    try:
+        import av
+        import numpy as np
+    except Exception as exc:  # noqa: BLE001
+        raise SpeechUnavailable(
+            "Распознавание речи не установлено. Установи faster-whisper."
+        ) from exc
+    try:
+        resampler = av.audio.resampler.AudioResampler(
+            format="s16",
+            layout="mono",
+            rate=16000,
+        )
+        chunks: list[bytes] = []
+        with av.open(io.BytesIO(data), mode="r") as container:
+            if not container.streams.audio:
+                raise ValueError("В записи нет звука.")
+            for frame in container.decode(audio=0):
+                for resampled in resampler.resample(frame):
+                    chunks.append(resampled.to_ndarray().tobytes())
+            for resampled in resampler.resample(None):
+                chunks.append(resampled.to_ndarray().tobytes())
+    except ValueError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError("Не удалось прочитать аудио.") from exc
+    if not chunks:
+        return np.zeros(0, dtype=np.float32)
+    return np.frombuffer(b"".join(chunks), dtype=np.int16).astype(np.float32) / 32768.0
+
+
+def _transcribe_audio(data: bytes, language: str) -> tuple[str, str, float]:
+    audio = _decode_audio(data)
+    if audio.size == 0:
+        raise ValueError("В записи нет звука.")
+    duration = float(audio.size) / 16000.0
+    if duration > MAX_AUDIO_SECONDS + 0.5:
+        raise AudioTooLong(
+            f"Запись слишком длинная. Максимум {int(MAX_AUDIO_SECONDS)} секунд."
+        )
+    model = _load_whisper_model()
+    segments, info = model.transcribe(
+        audio,
+        language=None if language == "auto" else language,
+        beam_size=5,
+        vad_filter=True,
+        vad_parameters={"min_silence_duration_ms": 500},
+        condition_on_previous_text=False,
+        without_timestamps=True,
+    )
+    text = " ".join(part.strip() for part in (seg.text for seg in segments) if part.strip())
+    text = " ".join(text.split())
+    if not text:
+        raise EmptySpeech(
+            "Речь не распознана. Попробуй ещё раз ближе к микрофону."
+        )
+    return text, str(info.language or language), duration
+
+
+async def _read_limited_body(request: Request, limit: int) -> bytes | None:
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > limit:
+            return None
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _load_history() -> list[dict]:
@@ -175,6 +311,7 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
     app.state.active = None
     app.state.active_lock = asyncio.Lock()
     app.state.history_lock = asyncio.Lock()
+    app.state.transcribe_lock = asyncio.Lock()
 
     async def remember(state: TaskState) -> dict:
         usage = state.last_usage or {}
@@ -382,7 +519,73 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
 
     @app.get("/api/health")
     async def health():
-        return {"ok": True, "version": "0.2"}
+        return {"ok": True, "version": "0.3"}
+
+    @app.post("/api/transcribe")
+    async def transcribe(request: Request):
+        content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        if not content_type.startswith("audio/"):
+            return JSONResponse(
+                {"error": "Нужен аудиофайл."},
+                status_code=415,
+            )
+        length_header = request.headers.get("content-length")
+        if length_header:
+            try:
+                if int(length_header) > MAX_AUDIO_BYTES:
+                    return JSONResponse(
+                        {"error": "Запись слишком большая."},
+                        status_code=413,
+                    )
+            except ValueError:
+                pass
+        data = await _read_limited_body(request, MAX_AUDIO_BYTES)
+        if data is None:
+            return JSONResponse(
+                {"error": "Запись слишком большая."},
+                status_code=413,
+            )
+        if len(data) < 128:
+            return JSONResponse(
+                {"error": "Пустая запись."},
+                status_code=400,
+            )
+        language = request.query_params.get("language") or _voice_language()
+        if language not in VOICE_LANGUAGES:
+            return JSONResponse(
+                {"error": "Неизвестный язык распознавания."},
+                status_code=400,
+            )
+        if app.state.transcribe_lock.locked():
+            return JSONResponse(
+                {"error": "Уже распознаю другую запись."},
+                status_code=409,
+            )
+        async with app.state.transcribe_lock:
+            try:
+                text, detected, duration = await asyncio.to_thread(
+                    _transcribe_audio, data, language
+                )
+            except AudioTooLong as exc:
+                return JSONResponse({"error": str(exc)}, status_code=413)
+            except EmptySpeech as exc:
+                return JSONResponse({"error": str(exc)}, status_code=422)
+            except SpeechUnavailable as exc:
+                return JSONResponse({"error": str(exc)}, status_code=503)
+            except ValueError as exc:
+                return JSONResponse({"error": str(exc)}, status_code=400)
+            except Exception as exc:  # noqa: BLE001
+                print(f"Ошибка распознавания: {exc}", file=sys.stderr)
+                return JSONResponse(
+                    {"error": "Не удалось распознать речь."},
+                    status_code=500,
+                )
+        return {
+            "text": text,
+            "language": detected,
+            "duration": round(duration, 2),
+            "model": os.environ.get("OMEGA_WHISPER_MODEL", "small"),
+        }
 
     @app.get("/api/summary")
     async def summary():

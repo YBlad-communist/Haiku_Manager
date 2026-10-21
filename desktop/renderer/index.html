@@ -120,6 +120,18 @@
           </div>
         </section>
 
+        <section class="setting">
+          <div class="setting-text">
+            <h3>Язык голосового ввода</h3>
+            <p>Русский, английский или автоопределение языка.</p>
+          </div>
+          <select class="ci voice-language" id="voiceLanguage" aria-label="Язык голосового ввода">
+            <option value="ru">Русский</option>
+            <option value="en">English</option>
+            <option value="auto">Авто</option>
+          </select>
+        </section>
+
         <section class="setting placeholder-setting">
           <div class="setting-text">
             <h3>Разрешённые папки</h3>
@@ -147,8 +159,8 @@
 
   <div class="overlay voice-screen" id="voice" role="dialog" aria-modal="true" aria-labelledby="voiceTitle" tabindex="-1" hidden>
     <div class="voice">
-      <div class="voice-circle cl">
-        <div class="voice-inset ci">
+      <div class="voice-circle cl" id="voiceCircle">
+        <div class="voice-inset ci" id="voiceBars">
           <span class="bar b1"></span>
           <span class="bar b2"></span>
           <span class="bar b3"></span>
@@ -157,8 +169,14 @@
         </div>
       </div>
       <p class="voice-title" id="voiceTitle">Слушаю…</p>
-      <div class="voice-text cl">Голос скоро появится</div>
-      <p class="voice-hint">Голосовой ввод появится на этапе B · Esc — закрыть</p>
+      <div class="voice-text cl" id="voiceText" role="status" aria-live="polite">Говори, я запишу.</div>
+      <p class="voice-timer" id="voiceTimer">0:00</p>
+      <div class="voice-actions">
+        <button type="button" class="bt voice-action" id="voiceStop">Остановить</button>
+        <button type="button" class="ci btn" id="voiceRetry" hidden>Повторить</button>
+        <button type="button" class="ci btn" id="voiceCancel">Отмена</button>
+      </div>
+      <p class="voice-hint" id="voiceHint">Максимум 60 секунд · Esc — отмена</p>
     </div>
   </div>
 

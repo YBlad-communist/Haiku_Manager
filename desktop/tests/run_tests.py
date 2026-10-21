@@ -14,6 +14,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 APP = ROOT / "desktop" / "server" / "app.py"
+VOICE_FIXTURE = ROOT / "desktop" / "tests" / "fixtures" / "voice_ru.wav"
+MODEL_DIR = Path(os.environ.get("OMEGA_MODEL_DIR") or (ROOT / "data" / "models"))
 TOKEN = "test-" + "a" * 60
 HOST = "127.0.0.1"
 
@@ -99,7 +101,10 @@ class Server:
         token: str | None = None,
         origin: str | None = None,
         body: dict | None = None,
+        raw: bytes | None = None,
+        content_type: str | None = None,
         extra_headers: dict | None = None,
+        timeout: int = 60,
     ):
         headers = {}
         if token:
@@ -107,12 +112,16 @@ class Server:
         if origin is not None:
             headers["Origin"] = origin
         payload = None
-        if body is not None:
+        if raw is not None:
+            payload = raw
+            if content_type:
+                headers["Content-Type"] = content_type
+        elif body is not None:
             payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
             headers["Content-Type"] = "application/json"
         if extra_headers:
             headers.update(extra_headers)
-        conn = http.client.HTTPConnection(HOST, self.port, timeout=15)
+        conn = http.client.HTTPConnection(HOST, self.port, timeout=timeout)
         try:
             conn.request(method, path, body=payload, headers=headers)
             response = conn.getresponse()
@@ -183,6 +192,10 @@ def header_value(headers: dict, name: str) -> str:
     return ""
 
 
+def whisper_model_ready() -> bool:
+    return any(MODEL_DIR.rglob("model.bin"))
+
+
 def test_worker_dialog() -> tuple[bool, str]:
     """Проверяет диалог send_message в отдельном процессе, без модели."""
     code = r"""
@@ -240,7 +253,7 @@ sys.stderr.write("диалог воркера: ок\n")
 
 
 def main() -> int:
-    print("Тесты сервера (модель не вызывается)\n")
+    print("Тесты сервера (голос — при наличии модели)\n")
     ok, detail = test_worker_dialog()
     check("диалог send_message: правка и отказ", ok, "" if ok else detail)
     server = Server()
@@ -262,6 +275,74 @@ def main() -> int:
             "frame-ancestors 'none'" in csp and "script-src 'self'" in csp,
             csp[:40] or "заголовка нет",
         )
+
+        status, _, _ = server.request(
+            "POST",
+            "/api/transcribe",
+            token=TOKEN,
+            origin=server.origin,
+            raw=b"x" * 128,
+        )
+        check("распознавание без аудио-типа — 415", status == 415, str(status))
+
+        status, _, _ = server.request(
+            "POST",
+            "/api/transcribe",
+            token=TOKEN,
+            origin=server.origin,
+            raw=b"",
+            content_type="audio/wav",
+        )
+        check("пустая запись — 400", status == 400, str(status))
+
+        status, _, _ = server.request(
+            "POST",
+            "/api/transcribe",
+            token=TOKEN,
+            origin=server.origin,
+            raw=b"not audio" * 40,
+            content_type="audio/wav",
+        )
+        check("битое аудио — 400", status == 400, str(status))
+
+        status, _, _ = server.request(
+            "POST",
+            "/api/transcribe?language=de",
+            token=TOKEN,
+            origin=server.origin,
+            raw=b"x" * 128,
+            content_type="audio/wav",
+        )
+        check("неизвестный язык — 400", status == 400, str(status))
+
+        if VOICE_FIXTURE.exists() and whisper_model_ready():
+            audio = VOICE_FIXTURE.read_bytes()
+            status, _, body = server.request(
+                "POST",
+                "/api/transcribe?language=ru",
+                token=TOKEN,
+                origin=server.origin,
+                raw=audio,
+                content_type="audio/wav",
+                timeout=180,
+            )
+            try:
+                voice = json.loads(body.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                voice = {}
+            check(
+                "реальная русская запись распознана",
+                status == 200
+                and "привет" in str(voice.get("text", "")).lower()
+                and "проверка" in str(voice.get("text", "")).lower(),
+                str(voice.get("text", status)),
+            )
+        else:
+            check(
+                "реальная русская запись распознана",
+                True,
+                "пропущено: нет модели или тестового WAV",
+            )
 
         status, _, _ = server.request("GET", "/../config.py")
         check("выход за папку закрыт", status in (400, 403, 404), str(status))

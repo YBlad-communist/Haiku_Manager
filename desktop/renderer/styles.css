@@ -904,6 +904,18 @@ textarea.draft {
   transform: translateX(24px);
 }
 
+.voice-language {
+  flex: 0 0 150px;
+  width: 150px;
+  padding: 11px 13px;
+  border: 0;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
 .budget-field {
   position: relative;
   flex: 0 0 140px;
@@ -994,6 +1006,8 @@ textarea.draft {
   width: 8px;
   border-radius: 4px;
   background: var(--accent);
+  transform-origin: center;
+  transition: transform .08s linear;
 }
 
 .b1 { height: 26px; }
@@ -1001,6 +1015,19 @@ textarea.draft {
 .b3 { height: 80px; }
 .b4 { height: 46px; }
 .b5 { height: 24px; }
+
+.voice-circle.listening {
+  animation: voice-glow 1.8s ease-in-out infinite;
+}
+
+@keyframes voice-glow {
+  0%, 100% {
+    box-shadow: var(--card-shadow), 0 0 0 0 rgba(91, 75, 214, .18);
+  }
+  50% {
+    box-shadow: var(--card-shadow), 0 0 0 14px rgba(91, 75, 214, .08);
+  }
+}
 
 .voice-title {
   margin: 0;
@@ -1014,6 +1041,32 @@ textarea.draft {
   font-size: 17px;
   line-height: 1.45;
   text-align: center;
+}
+
+.voice-text.error {
+  color: var(--danger-ink);
+}
+
+.voice-timer {
+  margin: -8px 0 0;
+  color: var(--muted);
+  font-size: 20px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .04em;
+}
+
+.voice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+}
+
+.voice-action {
+  min-width: 190px;
+  padding: 12px 22px;
+  font-size: 15px;
 }
 
 .voice-hint {
@@ -1066,7 +1119,12 @@ textarea.draft {
   }
 
   .bt,
-  .btn {
+  .btn,
+  .bar {
     transition: none;
+  }
+
+  .voice-circle.listening {
+    animation: none;
   }
 }

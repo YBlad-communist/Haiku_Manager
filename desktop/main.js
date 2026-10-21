@@ -483,6 +483,27 @@ function isHttpUrl(value) {
   }
 }
 
+function isMicrophonePermission(webContents, permission, details, requestingOrigin = "") {
+  if (permission !== "media" || !mainWindow || !apiBase) {
+    return false;
+  }
+  if (webContents !== mainWindow.webContents) {
+    return false;
+  }
+  const source = String(details?.requestingUrl || requestingOrigin || "");
+  if (source !== apiBase && !source.startsWith(`${apiBase}/`)) {
+    return false;
+  }
+  const mediaTypes = details?.mediaTypes;
+  if (Array.isArray(mediaTypes) && mediaTypes.some((type) => type !== "audio")) {
+    return false;
+  }
+  if (details?.mediaType && details.mediaType !== "audio") {
+    return false;
+  }
+  return true;
+}
+
 function registerIpc() {
   ipcMain.handle("omega:session", (event) => {
     if (!mainWindow || event.sender !== mainWindow.webContents) {
@@ -527,6 +548,7 @@ function registerIpc() {
       "hotkey",
       "autostart",
       "budget_limit_rub",
+      "voice_language",
       "allowed_folders",
       "allowed_apps",
     ]) {
@@ -616,10 +638,20 @@ if (!gotLock) {
   app.whenReady().then(async () => {
     Menu.setApplicationMenu(null);
 
-    session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => {
-      callback(false);
-    });
-    session.defaultSession.setPermissionCheckHandler(() => false);
+    session.defaultSession.setPermissionRequestHandler(
+      (webContents, permission, callback, details) => {
+        callback(isMicrophonePermission(webContents, permission, details));
+      },
+    );
+    session.defaultSession.setPermissionCheckHandler(
+      (webContents, permission, requestingOrigin, details) =>
+        isMicrophonePermission(
+          webContents,
+          permission,
+          details,
+          requestingOrigin,
+        ),
+    );
 
     registerIpc();
 
