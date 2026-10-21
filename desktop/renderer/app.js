@@ -849,20 +849,11 @@ function showChat(chatId) {
   els.input.focus();
 }
 
-async function loadChats(selectLatest = false) {
+async function loadChats() {
   try {
     const data = await apiJson("/api/chats");
     state.chats = Array.isArray(data.chats) ? data.chats : [];
     renderRecent(state.chats);
-    if (selectLatest && !state.chatId && state.chats.length) {
-      const latest = state.chats[0];
-      state.chatId = latest.id;
-      els.feed.replaceChildren();
-      for (const message of latest.messages || []) {
-        renderHistoryMessage(message, latest.id);
-      }
-      renderRecent(state.chats);
-    }
     if (state.chatId && !state.chats.some((chat) => chat.id === state.chatId)) {
       state.chatId = "";
     }
@@ -2061,7 +2052,7 @@ async function init() {
       state.settings = null;
     }
     await refreshSummary();
-    await loadChats(true);
+    await loadChats();
     els.input.focus();
   } catch (error) {
     const card = createAssistantCard("Ошибка запуска");

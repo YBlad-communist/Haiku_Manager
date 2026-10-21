@@ -847,6 +847,7 @@ textarea.draft {
   z-index: 12;
   place-items: center;
   background: var(--bg);
+  overflow: hidden;
 }
 
 .settings {
@@ -854,12 +855,14 @@ textarea.draft {
   flex-direction: column;
   width: 640px;
   max-width: 100%;
-  max-height: 100%;
+  max-height: calc(100vh - 40px);
+  max-height: calc(100dvh - 40px);
   padding: 26px 28px 22px;
 }
 
 .settings-head {
   display: flex;
+  flex: 0 0 auto;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
@@ -880,9 +883,11 @@ textarea.draft {
 }
 
 .settings-body {
+  flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding-right: 2px;
+  overscroll-behavior: contain;
+  padding-right: 8px;
 }
 
 .setting {
@@ -1102,6 +1107,7 @@ textarea.draft {
 
 .settings-foot {
   display: flex;
+  flex: 0 0 auto;
   justify-content: flex-end;
   padding-top: 18px;
 }
@@ -1235,7 +1241,8 @@ textarea.draft {
 .feed::-webkit-scrollbar,
 .draft::-webkit-scrollbar,
 .input::-webkit-scrollbar,
-.modal::-webkit-scrollbar {
+.modal::-webkit-scrollbar,
+.settings-body::-webkit-scrollbar {
   width: 10px;
 }
 
@@ -1243,7 +1250,8 @@ textarea.draft {
 .feed::-webkit-scrollbar-thumb,
 .draft::-webkit-scrollbar-thumb,
 .input::-webkit-scrollbar-thumb,
-.modal::-webkit-scrollbar-thumb {
+.modal::-webkit-scrollbar-thumb,
+.settings-body::-webkit-scrollbar-thumb {
   border: 3px solid transparent;
   border-radius: 10px;
   background: rgba(91, 88, 115, .35);
