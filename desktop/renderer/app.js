@@ -70,6 +70,10 @@ const els = {
   autostartToggle: document.getElementById("autostartToggle"),
   budgetInput: document.getElementById("budgetInput"),
   voiceLanguage: document.getElementById("voiceLanguage"),
+  allowedFolders: document.getElementById("allowedFolders"),
+  allowedApps: document.getElementById("allowedApps"),
+  addFolder: document.getElementById("addFolder"),
+  addApp: document.getElementById("addApp"),
   voiceCircle: document.getElementById("voiceCircle"),
   voiceBars: document.getElementById("voiceBars"),
   voiceTitle: document.getElementById("voiceTitle"),
@@ -96,6 +100,13 @@ const TOOL_LABELS = {
   search_companies_2gis: "Ищу компании в 2ГИС",
   draft_message: "Готовлю черновик",
   send_message: "Проверяю отправку",
+  list_allowed: "Смотрю разрешённые места",
+  list_files: "Смотрю файлы",
+  read_file: "Читаю файл",
+  write_file: "Записываю файл",
+  create_folder: "Создаю папку",
+  open_path: "Открываю папку",
+  launch_app: "Запускаю программу",
 };
 
 const markdown = window.markdownit
@@ -1451,6 +1462,54 @@ function clearSettingsError() {
   els.settingsError.hidden = true;
 }
 
+function renderAllowList(listElement, paths, kind) {
+  listElement.replaceChildren();
+  if (!paths.length) {
+    const empty = document.createElement("li");
+    empty.className = "allow-empty";
+    empty.textContent =
+      kind === "folder"
+        ? "Пока нет разрешённых папок."
+        : "Пока нет разрешённых программ.";
+    listElement.append(empty);
+    return;
+  }
+  for (const item of paths) {
+    const row = document.createElement("li");
+    row.className = "allow-item";
+    const pathText = document.createElement("span");
+    pathText.className = "allow-path";
+    pathText.textContent = item;
+    pathText.title = item;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "ci allow-remove";
+    remove.textContent = "×";
+    remove.dataset.kind = kind;
+    remove.dataset.path = item;
+    remove.setAttribute(
+      "aria-label",
+      kind === "folder" ? `Убрать папку ${item}` : `Убрать программу ${item}`,
+    );
+    row.append(pathText, remove);
+    listElement.append(row);
+  }
+}
+
+function renderAllowedLists() {
+  if (!state.settings) {
+    return;
+  }
+  const folders = Array.isArray(state.settings.allowed_folders)
+    ? state.settings.allowed_folders
+    : [];
+  const apps = Array.isArray(state.settings.allowed_apps)
+    ? state.settings.allowed_apps
+    : [];
+  renderAllowList(els.allowedFolders, folders, "folder");
+  renderAllowList(els.allowedApps, apps, "app");
+}
+
 function applySettingsToUi() {
   if (!state.settings) {
     return;
@@ -1470,6 +1529,7 @@ function applySettingsToUi() {
   if (document.activeElement !== els.voiceLanguage) {
     els.voiceLanguage.value = voiceLanguage;
   }
+  renderAllowedLists();
 }
 
 async function saveSettingsPatch(patch) {
@@ -1634,6 +1694,66 @@ async function saveVoiceLanguage() {
   }
 }
 
+async function addAllowedPath(kind) {
+  if (!state.settings || state.settingsBusy) {
+    return;
+  }
+  const isFolder = kind === "folder";
+  const key = isFolder ? "allowed_folders" : "allowed_apps";
+  const picker = isFolder ? window.omega.pickFolder : window.omega.pickApp;
+  if (typeof picker !== "function") {
+    showSettingsError("Приложение не умеет выбирать пути.");
+    return;
+  }
+  let picked = null;
+  try {
+    picked = await picker();
+  } catch (error) {
+    showSettingsError(error.message || "Не удалось выбрать путь.");
+    return;
+  }
+  if (!picked) {
+    return;
+  }
+  const current = Array.isArray(state.settings[key]) ? state.settings[key] : [];
+  const pickedKey = String(picked).toLowerCase();
+  if (current.some((item) => String(item).toLowerCase() === pickedKey)) {
+    showToast(
+      isFolder ? "Эта папка уже разрешена." : "Эта программа уже разрешена.",
+    );
+    return;
+  }
+  state.settingsBusy = true;
+  const ok = await saveSettingsPatch({ [key]: [...current, picked] });
+  state.settingsBusy = false;
+  if (ok) {
+    showToast(isFolder ? "Папка разрешена." : "Программа разрешена.");
+  }
+}
+
+async function removeAllowedPath(kind, pathValue) {
+  if (!state.settings || state.settingsBusy) {
+    return;
+  }
+  const key = kind === "folder" ? "allowed_folders" : "allowed_apps";
+  const current = Array.isArray(state.settings[key]) ? state.settings[key] : [];
+  const removeKey = String(pathValue).toLowerCase();
+  const next = current.filter((item) => String(item).toLowerCase() !== removeKey);
+  if (next.length === current.length) {
+    return;
+  }
+  state.settingsBusy = true;
+  const ok = await saveSettingsPatch({ [key]: next });
+  state.settingsBusy = false;
+  if (ok) {
+    showToast(
+      kind === "folder"
+        ? "Папка убрана из разрешённых."
+        : "Программа убрана из разрешённых.",
+    );
+  }
+}
+
 function handleSettingsChanged(settings) {
   if (!settings) {
     return;
@@ -1687,11 +1807,18 @@ function bindEvents() {
   els.settingsBtn.addEventListener("click", openSettings);
   els.settingsClose.addEventListener("click", closeSettings);
   els.settingsDone.addEventListener("click", closeSettings);
-  els.settings.addEventListener("click", (event) => {
+  els.settings.addEventListener("click", async (event) => {
     if (event.target === els.settings) {
       closeSettings();
+      return;
+    }
+    const removeButton = event.target.closest(".allow-remove");
+    if (removeButton) {
+      await removeAllowedPath(removeButton.dataset.kind, removeButton.dataset.path);
     }
   });
+  els.addFolder.addEventListener("click", () => addAllowedPath("folder"));
+  els.addApp.addEventListener("click", () => addAllowedPath("app"));
 
   els.hotkeyInput.addEventListener("click", startHotkeyCapture);
   els.hotkeyInput.addEventListener("blur", () => stopHotkeyCapture(true));

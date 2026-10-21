@@ -13,6 +13,8 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 APP = ROOT / "desktop" / "server" / "app.py"
 VOICE_FIXTURE = ROOT / "desktop" / "tests" / "fixtures" / "voice_ru.wav"
 MODEL_DIR = Path(os.environ.get("OMEGA_MODEL_DIR") or (ROOT / "data" / "models"))
@@ -236,6 +238,14 @@ second = messages.draft_message(
 worker.request_confirmation = lambda payload: {"action": "reject"}
 result2 = worker.ui_send_message(second["draft_id"])
 assert result2.get("status") == "cancelled", result2
+
+payloads = []
+worker.request_confirmation = (
+    lambda payload: payloads.append(payload) or {"action": "reject"}
+)
+assert worker.safety.ask_confirm("Записать файл?", title="Записать файл?") is False
+assert payloads[-1]["kind"] == "generic", payloads[-1]
+assert payloads[-1]["title"] == "Записать файл?", payloads[-1]
 sys.stderr.write("диалог воркера: ок\n")
 """
     with tempfile.TemporaryDirectory() as temp:
@@ -252,10 +262,141 @@ sys.stderr.write("диалог воркера: ок\n")
     return completed.returncode == 0, (completed.stderr or "").strip()[-300:]
 
 
+def test_computer_tools() -> None:
+    import config
+    import safety
+    import tools
+    from tools import computer
+
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp) / "allowed"
+        root.mkdir()
+        (root / "notes.txt").write_text("Привет, Омега!", encoding="utf-8")
+        (root / "secret.env").write_text("TOKEN=123", encoding="utf-8")
+        (root / "key.txt").write_text(
+            'API_KEY = "abcdefghijklmnop123456"', encoding="utf-8"
+        )
+        app = Path(temp) / "test.exe"
+        app.write_bytes(b"MZ")
+        outside = Path(temp) / "outside.txt"
+        outside.write_text("нельзя", encoding="utf-8")
+        settings_file = Path(temp) / "settings.json"
+        settings_file.write_text(
+            json.dumps(
+                {
+                    "allowed_folders": [str(root)],
+                    "allowed_apps": [str(app)],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        old_settings = config.SETTINGS_FILE
+        old_data = config.DATA_DIR
+        old_confirm = safety.ask_confirm
+        old_start = computer._start
+        started = []
+        try:
+            config.SETTINGS_FILE = settings_file
+            config.DATA_DIR = Path(temp)
+            safety.ask_confirm = lambda question, title=None, details=None: True
+            computer._start = lambda path: started.append(str(path))
+
+            allowed = tools.execute("list_allowed", {})
+            check(
+                "компьютер: разрешённые папки и программы",
+                allowed.get("folders") == [str(root)]
+                and allowed.get("apps") == [str(app)],
+                str(allowed),
+            )
+            listing = tools.execute("list_files", {"path": str(root)})
+            names = {item["name"] for item in listing.get("entries", [])}
+            check("компьютер: список файлов", {"notes.txt", "secret.env"} <= names, str(names))
+            read = tools.execute("read_file", {"path": str(root / "notes.txt")})
+            check("компьютер: чтение файла", read.get("text") == "Привет, Омега!", str(read))
+            outside_read = tools.execute("read_file", {"path": str(outside)})
+            traversal = tools.execute(
+                "read_file", {"path": str(root / ".." / "outside.txt")}
+            )
+            check(
+                "компьютер: путь вне папки и обход .. запрещены",
+                "error" in outside_read and "error" in traversal,
+                f"outside={outside_read}, traversal={traversal}",
+            )
+            secret = tools.execute("read_file", {"path": str(root / "secret.env")})
+            secret_text = tools.execute("read_file", {"path": str(root / "key.txt")})
+            check(
+                "компьютер: секреты не читаются",
+                "error" in secret and "error" in secret_text,
+                f"name={secret}, text={secret_text}",
+            )
+
+            safety.ask_confirm = lambda question, title=None, details=None: False
+            cancelled = tools.execute(
+                "write_file",
+                {"path": str(root / "new.txt"), "text": "текст"},
+            )
+            check(
+                "компьютер: запись без подтверждения отменена",
+                cancelled.get("cancelled") is True
+                and not (root / "new.txt").exists(),
+                str(cancelled),
+            )
+
+            safety.ask_confirm = lambda question, title=None, details=None: True
+            written = tools.execute(
+                "write_file",
+                {"path": str(root / "new.txt"), "text": "строка"},
+            )
+            check(
+                "компьютер: запись после подтверждения",
+                written.get("written") == 6
+                and (root / "new.txt").read_text(encoding="utf-8") == "строка",
+                str(written),
+            )
+            appended = tools.execute(
+                "write_file",
+                {"path": str(root / "new.txt"), "text": "!", "mode": "append"},
+            )
+            check(
+                "компьютер: дописывание файла",
+                appended.get("mode") == "append"
+                and (root / "new.txt").read_text(encoding="utf-8") == "строка!",
+                str(appended),
+            )
+            folder = tools.execute("create_folder", {"path": str(root / "новая")})
+            check(
+                "компьютер: создание папки",
+                folder.get("created") is True and (root / "новая").is_dir(),
+                str(folder),
+            )
+            opened = tools.execute("open_path", {"path": str(root)})
+            file_open = tools.execute("open_path", {"path": str(root / "notes.txt")})
+            launched = tools.execute("launch_app", {"path": str(app)})
+            blocked_app = tools.execute("launch_app", {"path": str(outside)})
+            check(
+                "компьютер: открытие папки и запуск только разрешённого",
+                opened.get("opened") is True
+                and "error" in file_open
+                and launched.get("launched") is True
+                and "error" in blocked_app
+                and str(root) in started
+                and str(app) in started,
+                f"opened={opened}, file={file_open}, launched={launched}, blocked={blocked_app}",
+            )
+        finally:
+            config.SETTINGS_FILE = old_settings
+            config.DATA_DIR = old_data
+            safety.ask_confirm = old_confirm
+            computer._start = old_start
+
+
 def main() -> int:
     print("Тесты сервера (голос — при наличии модели)\n")
     ok, detail = test_worker_dialog()
     check("диалог send_message: правка и отказ", ok, "" if ok else detail)
+    test_computer_tools()
     server = Server()
     try:
         status, _, _ = server.request("GET", "/api/health")

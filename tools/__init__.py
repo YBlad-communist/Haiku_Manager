@@ -1,5 +1,5 @@
 # Список инструментов, которые видит модель, и их исполнители.
-# В первой версии только безопасные действия: чтение и запись CSV.
+# Поиск, таблицы, сообщения и работа с разрешёнными папками и программами.
 
 import json
 from typing import Any, Callable
@@ -12,6 +12,7 @@ from .fetch_page import fetch_page
 from .save_to_table import save_to_table
 from .twogis import search_companies_2gis
 from .messages import draft_message, send_message
+from .computer import COMPUTER_TOOLS, HANDLERS as COMPUTER_HANDLERS
 
 
 TOOLS: list[dict] = [
@@ -192,7 +193,7 @@ TOOLS: list[dict] = [
             },
         },
     },
-]
+] + COMPUTER_TOOLS
 
 
 HANDLERS: dict[str, Callable[..., dict]] = {
@@ -202,6 +203,7 @@ HANDLERS: dict[str, Callable[..., dict]] = {
     "search_companies_2gis": search_companies_2gis,
     "draft_message": draft_message,
     "send_message": send_message,
+    **COMPUTER_HANDLERS,
 }
 
 

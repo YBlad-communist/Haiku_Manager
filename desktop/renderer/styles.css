@@ -943,16 +943,75 @@ textarea.draft {
   pointer-events: none;
 }
 
-.soon-chip {
-  flex: 0 0 auto;
-  padding: 6px 12px;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 700;
+.allow-setting {
+  align-items: flex-start;
 }
 
-.placeholder-setting {
-  opacity: .75;
+.allow-box {
+  display: flex;
+  flex: 0 1 320px;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.allow-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 150px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.allow-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 8px 8px 12px;
+  border-radius: 14px;
+  background: var(--inset);
+  box-shadow: var(--inset-shadow);
+}
+
+.allow-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.allow-remove {
+  flex: 0 0 26px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  color: var(--danger-ink);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.allow-empty {
+  padding: 8px 2px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.allow-add {
+  align-self: flex-start;
+  padding: 8px 14px;
+  font-size: 13px;
 }
 
 .settings-error {

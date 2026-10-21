@@ -115,7 +115,10 @@ def detect_injection(text: str) -> str | None:
     return match.group(0) if match else None
 
 
-def ask_confirm(question: str) -> bool:
+def ask_confirm(question: str, title: str | None = None, details: str | None = None) -> bool:
     """Спрашивает подтверждение в консоли. Всё, что не 'да', считается отказом."""
-    answer = input(f"{question} [да/нет]: ").strip().lower()
+    text = question
+    if details:
+        text = f"{text}\n{details}"
+    answer = input(f"{text} [да/нет]: ").strip().lower()
     return answer in ("да", "д", "yes", "y")

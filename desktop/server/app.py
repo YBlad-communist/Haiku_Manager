@@ -519,7 +519,7 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
 
     @app.get("/api/health")
     async def health():
-        return {"ok": True, "version": "0.3"}
+        return {"ok": True, "version": "0.4"}
 
     @app.post("/api/transcribe")
     async def transcribe(request: Request):

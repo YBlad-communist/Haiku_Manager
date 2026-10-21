@@ -16,19 +16,31 @@ function settingsPath(projectRoot) {
   return path.join(projectRoot, "data", "settings.json");
 }
 
-function cleanStringList(value, limit = 100) {
+function cleanPathList(value, limit = 50) {
   if (!Array.isArray(value)) {
     return [];
   }
   const result = [];
+  const seen = new Set();
   for (const item of value) {
     if (typeof item !== "string") {
       continue;
     }
-    const text = item.trim();
-    if (text && !result.includes(text)) {
-      result.push(text);
+    const raw = item.trim();
+    if (!raw || !path.isAbsolute(raw)) {
+      continue;
     }
+    let text = path.normalize(raw);
+    const root = path.parse(text).root;
+    if (text.length > root.length) {
+      text = text.replace(/[\\/]+$/, "");
+    }
+    const key = process.platform === "win32" ? text.toLowerCase() : text;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(text);
     if (result.length >= limit) {
       break;
     }
@@ -55,8 +67,8 @@ function sanitizeSettings(value, base = DEFAULTS) {
     autostart: Boolean(source.autostart),
     budget_limit_rub: budget,
     voice_language: voiceLanguage,
-    allowed_folders: cleanStringList(source.allowed_folders),
-    allowed_apps: cleanStringList(source.allowed_apps),
+    allowed_folders: cleanPathList(source.allowed_folders),
+    allowed_apps: cleanPathList(source.allowed_apps),
   };
 }
 
@@ -97,6 +109,7 @@ function saveSettings(projectRoot, settings) {
 
 module.exports = {
   DEFAULTS,
+  cleanPathList,
   loadSettings,
   saveSettings,
   sanitizeSettings,

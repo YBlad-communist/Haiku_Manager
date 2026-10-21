@@ -81,15 +81,20 @@ def request_confirmation(payload: dict) -> dict:
 _AUTO_CONFIRM: bool | None = None
 
 
-def ask_confirm(question: str) -> bool:
+def ask_confirm(
+    question: str,
+    title: str | None = None,
+    details: str | None = None,
+) -> bool:
     """Замена консольного подтверждения из safety.py."""
     if _AUTO_CONFIRM is not None:
         return _AUTO_CONFIRM
+    text = question if not details else f"{question}\n\n{details}"
     answer = request_confirmation(
         {
             "kind": "generic",
-            "title": "Подтвердить действие?",
-            "text": question,
+            "title": title or "Подтвердить действие?",
+            "text": text,
             "channel": "",
             "today": 0,
             "limit": 0,

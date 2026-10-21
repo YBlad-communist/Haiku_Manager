@@ -132,20 +132,26 @@
           </select>
         </section>
 
-        <section class="setting placeholder-setting">
+        <section class="setting allow-setting">
           <div class="setting-text">
             <h3>Разрешённые папки</h3>
-            <p>Появится на этапе C. Здесь будут папки, внутри которых Омеге можно работать.</p>
+            <p>Омега сможет читать и изменять файлы только внутри этих папок.</p>
           </div>
-          <span class="soon-chip ci">Скоро</span>
+          <div class="allow-box">
+            <ul class="allow-list" id="allowedFolders" aria-label="Разрешённые папки"></ul>
+            <button type="button" class="bt allow-add" id="addFolder">Добавить папку</button>
+          </div>
         </section>
 
-        <section class="setting placeholder-setting">
+        <section class="setting allow-setting">
           <div class="setting-text">
             <h3>Разрешённые приложения</h3>
-            <p>Появится на этапе C. Здесь будет список программ, которые можно запускать.</p>
+            <p>Только эти программы Омега сможет запускать после подтверждения.</p>
           </div>
-          <span class="soon-chip ci">Скоро</span>
+          <div class="allow-box">
+            <ul class="allow-list" id="allowedApps" aria-label="Разрешённые приложения"></ul>
+            <button type="button" class="bt allow-add" id="addApp">Добавить программу</button>
+          </div>
         </section>
 
         <p class="settings-error" id="settingsError" role="alert" hidden></p>
