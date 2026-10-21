@@ -1,0 +1,15 @@
+{
+  "name": "haiku-manager",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Десктопный помощник поверх Python-агента Haiku_Manager",
+  "main": "desktop/main.js",
+  "scripts": {
+    "start": "electron .",
+    "build:launcher": "powershell -NoProfile -ExecutionPolicy Bypass -File desktop/launcher/build.ps1",
+    "test": "py -3.14 desktop/tests/run_tests.py"
+  },
+  "devDependencies": {
+    "electron": "^41.3.0"
+  }
+}

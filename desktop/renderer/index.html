@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Джарвис</title>
+  <link rel="stylesheet" href="nunito.css">
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <div class="app" id="app">
+    <aside class="sidebar cl">
+      <h1 class="brand">Джарвис</h1>
+      <button type="button" class="bt new-task" id="newTask">Новая задача</button>
+      <p class="label">Недавние</p>
+      <div class="recent" id="recent"></div>
+      <div class="budget ci">
+        <p class="budget-label">Бюджет ключа</p>
+        <p class="budget-value" id="budgetValue">—</p>
+      </div>
+    </aside>
+
+    <main class="main">
+      <section class="feed" id="feed" aria-live="polite" aria-label="Лента сообщений"></section>
+      <form class="composer cl" id="composer">
+        <textarea class="ci input" id="input" rows="1" placeholder="Напиши или нажми на микрофон…" aria-label="Задача помощнику"></textarea>
+        <button type="button" class="ci icon-btn mic-btn" id="mic" aria-label="Голосовой ввод">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"></path>
+            <path d="M5 11a7 7 0 0 0 14 0"></path>
+            <path d="M12 18v3"></path>
+          </svg>
+        </button>
+        <button type="submit" class="bt icon-btn send-btn" id="send" aria-label="Отправить">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M5 12h14"></path>
+            <path d="m13 6 6 6-6 6"></path>
+          </svg>
+        </button>
+      </form>
+    </main>
+  </div>
+
+  <div class="overlay" id="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle" hidden>
+    <div class="modal cl">
+      <h2 id="modalTitle">Отправить сообщение?</h2>
+      <p class="modal-sub" id="modalSubtitle"></p>
+      <div class="draft" id="draftText"></div>
+      <textarea class="draft" id="draftEdit" aria-label="Текст сообщения" hidden></textarea>
+      <div class="chips" id="modalChips">
+        <span class="chip ci" id="chipChannel"></span>
+        <span class="chip ci" id="chipToday"></span>
+      </div>
+      <p class="modal-error" id="modalError" role="alert" hidden></p>
+      <div class="modal-actions">
+        <button type="button" class="ci btn" id="reject">Отклонить</button>
+        <button type="button" class="ci btn" id="edit">Изменить</button>
+        <button type="button" class="bt btn-accent" id="approve">Отправить</button>
+      </div>
+      <p class="fineprint">Без вашего подтверждения ничего не уходит.</p>
+    </div>
+  </div>
+
+  <div class="overlay voice-screen" id="voice" role="dialog" aria-modal="true" aria-labelledby="voiceTitle" tabindex="-1" hidden>
+    <div class="voice">
+      <div class="voice-circle cl">
+        <div class="voice-inset ci">
+          <span class="bar b1"></span>
+          <span class="bar b2"></span>
+          <span class="bar b3"></span>
+          <span class="bar b4"></span>
+          <span class="bar b5"></span>
+        </div>
+      </div>
+      <p class="voice-title" id="voiceTitle">Слушаю…</p>
+      <div class="voice-text cl">Голос скоро появится</div>
+      <p class="voice-hint">Отпусти Ctrl+Space, чтобы отправить · Esc — отмена</p>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <template id="assistantTpl">
+    <article class="assistant cl">
+      <div class="assistant-head">
+        <h2 class="assistant-title">Работаю над задачей</h2>
+        <button type="button" class="ci stop-btn" aria-label="Остановить задачу">Стоп</button>
+      </div>
+      <div class="steps"></div>
+      <p class="card-foot"></p>
+      <div class="answer" hidden></div>
+    </article>
+  </template>
+</body>
+</html>

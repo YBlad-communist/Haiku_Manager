@@ -1,0 +1,7 @@
+{
+  "hotkey": "CommandOrControl+Space",
+  "python": {
+    "command": "py",
+    "args": ["-3.14"]
+  }
+}
