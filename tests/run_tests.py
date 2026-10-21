@@ -2,7 +2,6 @@
 # Запуск:  python tests\run_tests.py
 # С проверкой модели (одна дешёвая задача):  python tests\run_tests.py --with-llm
 
-import json
 import sys
 import tempfile
 from pathlib import Path
@@ -62,10 +61,10 @@ def test_tools_schema() -> str:
     names = {tool["function"]["name"] for tool in TOOLS}
     assert names == {
         "search_web", "fetch_page", "save_to_table", "search_companies_2gis",
-        "draft_message", "send_message", "list_allowed", "list_files",
-        "read_file", "write_file", "create_folder", "open_path", "launch_app",
+        "draft_message", "send_message", "list_files", "read_file",
+        "write_file", "create_folder", "open_path", "launch_app",
     }, names
-    return "13 инструментов"
+    return "12 инструментов"
 
 
 def test_safety() -> str:
@@ -208,37 +207,27 @@ def test_messages() -> str:
 
 
 def test_computer_tools() -> str:
-    old_settings = config.SETTINGS_FILE
     old_confirm = safety.ask_confirm
     temp_dir = Path(tempfile.mkdtemp(prefix="haiku_computer_"))
-    root = temp_dir / "allowed"
+    root = temp_dir / "work"
     root.mkdir()
     (root / "note.txt").write_text("Привет, Омега!", encoding="utf-8")
     (root / "secret.env").write_text("TOKEN=123", encoding="utf-8")
     outside = temp_dir / "outside.txt"
     outside.write_text("нельзя", encoding="utf-8")
-    settings_file = temp_dir / "settings.json"
-    settings_file.write_text(
-        json.dumps({"allowed_folders": [str(root)], "allowed_apps": []}),
-        encoding="utf-8",
-    )
-    config.SETTINGS_FILE = settings_file
     safety.ask_confirm = lambda *args, **kwargs: True
     try:
-        allowed = execute("list_allowed", {})
-        assert allowed["folders"] == [str(root)], allowed
         read = execute("read_file", {"path": str(root / "note.txt")})
         assert read.get("text") == "Привет, Омега!", read
-        assert "error" in execute("read_file", {"path": str(outside)})
+        assert execute("read_file", {"path": str(outside)}).get("text") == "нельзя"
         assert "error" in execute("read_file", {"path": str(root / "secret.env")})
         written = execute(
             "write_file", {"path": str(root / "new.txt"), "text": "строка"}
         )
         assert written.get("written") == 6, written
         assert (root / "new.txt").read_text(encoding="utf-8") == "строка"
-        return "чтение, запись, песочница и секреты"
+        return "любой путь, запись и секреты"
     finally:
-        config.SETTINGS_FILE = old_settings
         safety.ask_confirm = old_confirm
 
 
@@ -269,7 +258,7 @@ def main() -> int:
     check("search_web: Yandex без ключей", test_yandex_guard)
     check("search_web: разбор XML v2", test_yandex_xml_parser)
     check("сообщения (черновик и заглушка)", test_messages)
-    check("компьютер: разрешённые файлы", test_computer_tools)
+    check("компьютер: файлы и секреты", test_computer_tools)
 
     if "--with-llm" in sys.argv:
         check("модель через агент", test_agent_llm)

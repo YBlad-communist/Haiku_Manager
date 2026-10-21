@@ -518,41 +518,6 @@ function registerIpc() {
     }
   });
 
-  ipcMain.handle("omega:pick-folder", async (event) => {
-    if (!mainWindow || event.sender !== mainWindow.webContents) {
-      return null;
-    }
-    const result = await dialog.showOpenDialog(mainWindow, {
-      title: "Выбери папку, в которой Омеге можно работать",
-      properties: ["openDirectory"],
-      dontAddToRecent: true,
-    });
-    if (result.canceled || !result.filePaths.length) {
-      return null;
-    }
-    return path.resolve(result.filePaths[0]);
-  });
-
-  ipcMain.handle("omega:pick-app", async (event) => {
-    if (!mainWindow || event.sender !== mainWindow.webContents) {
-      return null;
-    }
-    const result = await dialog.showOpenDialog(mainWindow, {
-      title: "Выбери программу, которую можно запускать",
-      properties: ["openFile"],
-      filters: [{ name: "Программы", extensions: ["exe", "lnk"] }],
-      dontAddToRecent: true,
-    });
-    if (result.canceled || !result.filePaths.length) {
-      return null;
-    }
-    const file = path.resolve(result.filePaths[0]);
-    if (![".exe", ".lnk"].includes(path.extname(file).toLowerCase())) {
-      return null;
-    }
-    return file;
-  });
-
   ipcMain.handle("omega:open-external", async (event, url) => {
     if (!mainWindow || event.sender !== mainWindow.webContents) {
       return false;
@@ -584,8 +549,9 @@ function registerIpc() {
       "autostart",
       "budget_limit_rub",
       "voice_language",
-      "allowed_folders",
-      "allowed_apps",
+      "model",
+      "system_prompt",
+      "theme",
     ]) {
       if (Object.prototype.hasOwnProperty.call(patch, key)) {
         allowed[key] = patch[key];

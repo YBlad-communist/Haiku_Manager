@@ -22,6 +22,28 @@
     inset 2px 2px 4px rgba(255, 255, 255, .3);
 }
 
+:root[data-theme="dark"] {
+  --bg: #151321;
+  --card: #211E33;
+  --inset: #1A1729;
+  --text: #F2EFFF;
+  --muted: #AAA4C4;
+  --accent: #8B79FF;
+  --success: #174C3D;
+  --success-ink: #7FE3C3;
+  --process: #5A3220;
+  --process-ink: #FFB48A;
+  --danger-ink: #FF9D9D;
+  --card-shadow: 12px 12px 26px rgba(4, 3, 10, .55),
+    -8px -8px 20px rgba(66, 58, 104, .22),
+    inset 2px 2px 4px rgba(255, 255, 255, .04);
+  --inset-shadow: inset 5px 5px 10px rgba(5, 4, 12, .55),
+    inset -5px -5px 10px rgba(64, 56, 100, .22);
+  --button-shadow: 6px 6px 16px rgba(4, 3, 10, .5),
+    -4px -4px 10px rgba(73, 64, 116, .25),
+    inset 2px 2px 4px rgba(255, 255, 255, .12);
+}
+
 *,
 *::before,
 *::after {
@@ -179,8 +201,16 @@ button:disabled {
   padding: 2px;
 }
 
+.recent-row {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+}
+
 .recent-item {
+  flex: 1;
   width: 100%;
+  min-width: 0;
   padding: 10px 12px;
   border: 0;
   overflow: hidden;
@@ -191,6 +221,27 @@ button:disabled {
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;
+}
+
+.recent-item.active {
+  color: var(--accent);
+  font-weight: 800;
+}
+
+.recent-delete {
+  flex: 0 0 30px;
+  width: 30px;
+  padding: 0;
+  border: 0;
+  color: var(--danger-ink);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: .75;
+}
+
+.recent-delete:hover {
+  opacity: 1;
 }
 
 .recent-empty {
@@ -273,6 +324,12 @@ button:disabled {
   line-height: 1.35;
 }
 
+.assistant-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
 .stop-btn {
   flex: 0 0 auto;
   padding: 8px 14px;
@@ -281,6 +338,10 @@ button:disabled {
   font-size: 13px;
   font-weight: 700;
   cursor: pointer;
+}
+
+.msg-delete {
+  color: var(--danger-ink);
 }
 
 .steps {
@@ -833,8 +894,26 @@ textarea.draft {
   border-top: 1px solid rgba(91, 88, 115, .16);
 }
 
+.setting-column {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
 .setting-text {
   min-width: 0;
+}
+
+.system-prompt {
+  width: 100%;
+  min-height: 150px;
+  padding: 14px 16px;
+  border: 0;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  resize: vertical;
 }
 
 .setting-text h3 {
@@ -905,8 +984,8 @@ textarea.draft {
 }
 
 .voice-language {
-  flex: 0 0 150px;
-  width: 150px;
+  flex: 0 0 210px;
+  width: 210px;
   padding: 11px 13px;
   border: 0;
   color: var(--text);

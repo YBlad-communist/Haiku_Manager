@@ -2,6 +2,7 @@
 # Все секреты берутся только из переменных окружения или из .env.
 # Ключи сюда не вписывать.
 
+import json
 import os
 from pathlib import Path
 
@@ -55,8 +56,34 @@ LOGS_DIR.mkdir(exist_ok=True)
 
 # --- Модель ---
 MODEL = os.environ.get("MODEL", "claude-haiku-5.5")
+MODEL_OPTIONS = (
+    "deepseek-v4.1-flash",
+    "glm-5.3-flash",
+    "gpt-6-luna",
+    "claude-haiku-5.5",
+)
 BASE_URL = os.environ.get("BASE_URL", "https://api.aitunnel.ru/v1/")
 AITUNNEL_API_KEY = os.environ.get("AITUNNEL_API_KEY", "")
+
+
+def load_settings() -> dict:
+    try:
+        data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def current_model() -> str:
+    value = str(load_settings().get("model") or "").strip()
+    return value if value in MODEL_OPTIONS else MODEL
+
+
+def current_system_prompt() -> str:
+    value = load_settings().get("system_prompt")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return PROMPT_FILE.read_text(encoding="utf-8").strip()
 
 # --- 2ГИС ---
 TWOGIS_API_KEY = os.environ.get("TWOGIS_API_KEY", "")

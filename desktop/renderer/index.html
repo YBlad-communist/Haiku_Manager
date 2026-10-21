@@ -23,8 +23,8 @@
           </svg>
         </button>
       </div>
-      <button type="button" class="bt new-task" id="newTask">Новая задача</button>
-      <p class="label">Недавние</p>
+      <button type="button" class="bt new-task" id="newTask">Новый чат</button>
+      <p class="label">Чаты</p>
       <div class="recent" id="recent"></div>
       <div class="budget ci">
         <p class="budget-label">Бюджет ключа</p>
@@ -132,26 +132,37 @@
           </select>
         </section>
 
-        <section class="setting allow-setting">
+        <section class="setting">
           <div class="setting-text">
-            <h3>Разрешённые папки</h3>
-            <p>Омега сможет читать и изменять файлы только внутри этих папок.</p>
+            <h3>Модель</h3>
+            <p>Какая модель выполняет задачи. Haiku 5.5 — самая быстрая и дешёвая.</p>
           </div>
-          <div class="allow-box">
-            <ul class="allow-list" id="allowedFolders" aria-label="Разрешённые папки"></ul>
-            <button type="button" class="bt allow-add" id="addFolder">Добавить папку</button>
-          </div>
+          <select class="ci voice-language" id="modelSelect" aria-label="Модель">
+            <option value="deepseek-v4.1-flash">DEEPSEEK V4.1 Flash</option>
+            <option value="glm-5.3-flash">GLM 5.3 Flash</option>
+            <option value="gpt-6-luna">GPT 6 Luna</option>
+            <option value="claude-haiku-5.5">Haiku 5.5</option>
+          </select>
         </section>
 
-        <section class="setting allow-setting">
+        <section class="setting">
           <div class="setting-text">
-            <h3>Разрешённые приложения</h3>
-            <p>Только эти программы Омега сможет запускать после подтверждения.</p>
+            <h3>Тема</h3>
+            <p>Светлая или тёмная. Применяется сразу.</p>
           </div>
-          <div class="allow-box">
-            <ul class="allow-list" id="allowedApps" aria-label="Разрешённые приложения"></ul>
-            <button type="button" class="bt allow-add" id="addApp">Добавить программу</button>
+          <select class="ci voice-language" id="themeSelect" aria-label="Тема">
+            <option value="light">Светлая</option>
+            <option value="dark">Тёмная</option>
+          </select>
+        </section>
+
+        <section class="setting setting-column">
+          <div class="setting-text">
+            <h3>Системный промт</h3>
+            <p>Характер и правила Омеги. Пустое поле вернёт промт по умолчанию.</p>
           </div>
+          <textarea class="ci system-prompt" id="systemPrompt" rows="8" maxlength="20000"
+                    aria-label="Системный промт" spellcheck="false"></textarea>
         </section>
 
         <p class="settings-error" id="settingsError" role="alert" hidden></p>
@@ -192,7 +203,10 @@
     <article class="assistant cl">
       <div class="assistant-head">
         <h2 class="assistant-title">Работаю над задачей</h2>
-        <button type="button" class="ci stop-btn" aria-label="Остановить задачу">Стоп</button>
+        <div class="assistant-actions">
+          <button type="button" class="ci stop-btn msg-delete" hidden aria-label="Удалить задачу">Удалить</button>
+          <button type="button" class="ci stop-btn" aria-label="Остановить задачу">Стоп</button>
+        </div>
       </div>
       <div class="steps"></div>
       <p class="card-foot"></p>

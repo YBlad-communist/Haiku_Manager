@@ -30,6 +30,17 @@ def load_system_prompt(path: Path = PROMPT_FILE) -> str:
 SYSTEM_PROMPT = load_system_prompt()
 
 
+def get_system_prompt() -> str:
+    try:
+        prompt = config.current_system_prompt()
+    except OSError as exc:
+        safety.log_event("prompt_load_error", error=str(exc)[:300])
+        prompt = load_system_prompt()
+    if not prompt:
+        prompt = load_system_prompt()
+    return prompt
+
+
 def _shorten(text: str, limit: int = 160) -> str:
     text = text.replace("\n", " ")
     return text if len(text) <= limit else text[:limit] + "..."
@@ -53,21 +64,33 @@ def _summary(result: dict) -> str:
     return _shorten(json.dumps(result, ensure_ascii=False, default=str), 200)
 
 
-def run(task: str, verbose: bool = True, max_steps: int | None = None) -> dict:
+def run(
+    task: str,
+    verbose: bool = True,
+    max_steps: int | None = None,
+    history: list[dict] | None = None,
+) -> dict:
     """Выполняет задачу и возвращает итог, число шагов, токены и стоимость."""
     limit = max(1, int(max_steps or config.MAX_STEPS))
     llm = LLM()
     messages: list[dict[str, Any]] = [
         {
             "role": "system",
-            "content": SYSTEM_PROMPT,
+            "content": get_system_prompt(),
         },
-        {"role": "user", "content": task},
     ]
+    for item in history or []:
+        if not isinstance(item, dict):
+            continue
+        role = item.get("role")
+        content = item.get("content")
+        if role in ("user", "assistant") and isinstance(content, str) and content:
+            messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": task})
 
     if verbose:
         print(f"\nЗадача: {task}")
-        print(f"Модель: {config.MODEL} | шагов максимум: {limit} | "
+        print(f"Модель: {llm.model} | шагов максимум: {limit} | "
               f"токенов максимум: {config.MAX_TASK_TOKENS}\n")
 
     stopped_reason = "done"

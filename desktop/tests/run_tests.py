@@ -131,8 +131,8 @@ class Server:
         finally:
             conn.close()
 
-    def stream(self, task: str):
-        body = json.dumps({"task": task}, ensure_ascii=False)
+    def stream(self, task: str, chat_id: str = ""):
+        body = json.dumps({"task": task, "chat_id": chat_id}, ensure_ascii=False)
         conn = http.client.HTTPConnection(HOST, self.port, timeout=30)
         conn.request(
             "POST",
@@ -280,36 +280,16 @@ def test_computer_tools() -> None:
         app.write_bytes(b"MZ")
         outside = Path(temp) / "outside.txt"
         outside.write_text("нельзя", encoding="utf-8")
-        settings_file = Path(temp) / "settings.json"
-        settings_file.write_text(
-            json.dumps(
-                {
-                    "allowed_folders": [str(root)],
-                    "allowed_apps": [str(app)],
-                },
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
-        )
 
-        old_settings = config.SETTINGS_FILE
         old_data = config.DATA_DIR
         old_confirm = safety.ask_confirm
         old_start = computer._start
         started = []
         try:
-            config.SETTINGS_FILE = settings_file
             config.DATA_DIR = Path(temp)
             safety.ask_confirm = lambda question, title=None, details=None: True
             computer._start = lambda path: started.append(str(path))
 
-            allowed = tools.execute("list_allowed", {})
-            check(
-                "компьютер: разрешённые папки и программы",
-                allowed.get("folders") == [str(root)]
-                and allowed.get("apps") == [str(app)],
-                str(allowed),
-            )
             listing = tools.execute("list_files", {"path": str(root)})
             names = {item["name"] for item in listing.get("entries", [])}
             check("компьютер: список файлов", {"notes.txt", "secret.env"} <= names, str(names))
@@ -320,8 +300,9 @@ def test_computer_tools() -> None:
                 "read_file", {"path": str(root / ".." / "outside.txt")}
             )
             check(
-                "компьютер: путь вне папки и обход .. запрещены",
-                "error" in outside_read and "error" in traversal,
+                "компьютер: любой путь вне папки разрешён",
+                outside_read.get("text") == "нельзя"
+                and traversal.get("text") == "нельзя",
                 f"outside={outside_read}, traversal={traversal}",
             )
             secret = tools.execute("read_file", {"path": str(root / "secret.env")})
@@ -376,7 +357,7 @@ def test_computer_tools() -> None:
             launched = tools.execute("launch_app", {"path": str(app)})
             blocked_app = tools.execute("launch_app", {"path": str(outside)})
             check(
-                "компьютер: открытие папки и запуск только разрешённого",
+                "компьютер: открытие папки и запуск любого exe",
                 opened.get("opened") is True
                 and "error" in file_open
                 and launched.get("launched") is True
@@ -386,7 +367,6 @@ def test_computer_tools() -> None:
                 f"opened={opened}, file={file_open}, launched={launched}, blocked={blocked_app}",
             )
         finally:
-            config.SETTINGS_FILE = old_settings
             config.DATA_DIR = old_data
             safety.ask_confirm = old_confirm
             computer._start = old_start
@@ -557,8 +537,9 @@ def main() -> int:
             "остаток бюджета посчитан",
             final is not None and isinstance(final.get("remaining_rub"), (int, float)),
         )
+        first_chat_id = (final or {}).get("chat_id") or ""
 
-        conn, response = server.stream("вторая задача")
+        conn, response = server.stream("вторая задача", chat_id=first_chat_id)
         first = None
         for event in read_events(response):
             if event.get("type") in ("step", "tool"):
@@ -593,6 +574,48 @@ def main() -> int:
             0 < summary.get("spent", 0) < 500
             and summary.get("remaining_rub", 0) < 500,
             f"spent={summary.get('spent')}",
+        )
+        check(
+            "обе задачи в одном чате",
+            len(summary.get("chats", [])) == 1,
+            str(summary.get("chats")),
+        )
+
+        status, _, body = server.request("GET", "/api/chats", token=TOKEN)
+        chats = json.loads(body.decode("utf-8")).get("chats", [])
+        check(
+            "чат хранит сообщения",
+            status == 200
+            and len(chats) == 1
+            and len(chats[0].get("messages", [])) == 4,
+            f"status={status}, chats={chats}",
+        )
+        message_id = (chats[0].get("messages") or [{}])[-1].get("id")
+        status, _, _ = server.request(
+            "DELETE",
+            f"/api/chats/{chats[0]['id']}/messages/{message_id}",
+            token=TOKEN,
+            origin=server.origin,
+        )
+        status2, _, body = server.request("GET", "/api/summary", token=TOKEN)
+        after_delete = json.loads(body.decode("utf-8")) if status2 == 200 else {}
+        check(
+            "удаление задачи",
+            status == 200 and len(after_delete.get("history", [])) == 1,
+            f"status={status}, history={len(after_delete.get('history', []))}",
+        )
+        status, _, _ = server.request(
+            "DELETE",
+            f"/api/chats/{chats[0]['id']}",
+            token=TOKEN,
+            origin=server.origin,
+        )
+        status2, _, body = server.request("GET", "/api/chats", token=TOKEN)
+        remaining = json.loads(body.decode("utf-8")).get("chats", []) if status2 == 200 else []
+        check(
+            "удаление чата",
+            status == 200 and remaining == [],
+            f"status={status}, chats={remaining}",
         )
     finally:
         server.close()

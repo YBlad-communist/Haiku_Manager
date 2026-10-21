@@ -64,6 +64,7 @@ CSP = (
 
 class TaskIn(BaseModel):
     task: str = ""
+    chat_id: str = ""
 
 
 class ConfirmIn(BaseModel):
@@ -75,6 +76,9 @@ class ConfirmIn(BaseModel):
 @dataclass
 class TaskState:
     task: str
+    chat_id: str = ""
+    user_message_id: str = ""
+    history: list[dict] = field(default_factory=list)
     proc: asyncio.subprocess.Process | None = None
     stderr: deque = field(default_factory=lambda: deque(maxlen=40))
     stderr_task: asyncio.Task | None = None
@@ -227,29 +231,158 @@ async def _read_limited_body(request: Request, limit: int) -> bytes | None:
     return b"".join(chunks)
 
 
-def _load_history() -> list[dict]:
+def _now() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def _chat_title(text: str) -> str:
+    title = " ".join(str(text or "").split())
+    return title[:70] or "Новый чат"
+
+
+def _new_chat(title: str = "Новый чат") -> dict:
+    stamp = _now()
+    return {
+        "id": uuid.uuid4().hex[:12],
+        "title": _chat_title(title),
+        "created_at": stamp,
+        "updated_at": stamp,
+        "messages": [],
+    }
+
+
+def _as_int(value) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _as_float(value) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _clean_message(item) -> dict | None:
+    if not isinstance(item, dict):
+        return None
+    role = item.get("role")
+    if role not in ("user", "assistant"):
+        return None
+    message = {
+        "id": str(item.get("id") or uuid.uuid4().hex[:12])[:32],
+        "role": role,
+        "text": str(item.get("text") or "")[:100_000],
+        "created_at": str(item.get("created_at") or _now())[:40],
+    }
+    if role == "assistant":
+        message["steps"] = _as_int(item.get("steps"))
+        message["tokens"] = _as_int(item.get("tokens"))
+        message["cost"] = round(_as_float(item.get("cost")), 4)
+        message["stopped_reason"] = str(item.get("stopped_reason") or "")[:40]
+        task_id = str(item.get("task_id") or "")[:32]
+        if task_id:
+            message["task_id"] = task_id
+    return message
+
+
+def _clean_chat(item) -> dict | None:
+    if not isinstance(item, dict):
+        return None
+    chat_id = str(item.get("id") or uuid.uuid4().hex[:12])[:32]
+    messages = [
+        message
+        for message in (_clean_message(raw) for raw in item.get("messages") or [])
+        if message is not None
+    ]
+    created = str(item.get("created_at") or _now())[:40]
+    updated = str(item.get("updated_at") or created)[:40]
+    return {
+        "id": chat_id,
+        "title": _chat_title(item.get("title")),
+        "created_at": created,
+        "updated_at": updated,
+        "messages": messages,
+    }
+
+
+def _legacy_chat(tasks: list[dict]) -> dict:
+    messages = []
+    for index, item in enumerate(reversed(tasks)):
+        created = str(item.get("created_at") or _now())[:40]
+        task_id = str(item.get("id") or f"task{index}")[:28]
+        messages.append(
+            {
+                "id": f"u-{task_id}"[:32],
+                "role": "user",
+                "text": str(item.get("task") or ""),
+                "created_at": created,
+            }
+        )
+        answer = {
+            "id": f"a-{task_id}"[:32],
+            "role": "assistant",
+            "text": str(item.get("answer") or ""),
+            "created_at": created,
+            "steps": _as_int(item.get("steps")),
+            "tokens": _as_int(item.get("tokens")),
+            "cost": round(_as_float(item.get("cost")), 4),
+            "stopped_reason": str(item.get("stopped_reason") or "")[:40],
+        }
+        if task_id:
+            answer["task_id"] = task_id
+        messages.append(answer)
+    oldest = str(tasks[-1].get("created_at") or _now())[:40] if tasks else _now()
+    newest = str(tasks[0].get("created_at") or _now())[:40] if tasks else oldest
+    return {
+        "id": "legacy",
+        "title": "Старые задачи",
+        "created_at": oldest,
+        "updated_at": newest,
+        "messages": messages,
+    }
+
+
+def _load_store() -> dict:
     path = _history_path()
     if not path.exists():
-        return []
+        return {"tasks": [], "chats": []}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return []
-    tasks = data.get("tasks") if isinstance(data, dict) else None
-    if not isinstance(tasks, list):
-        return []
-    return [item for item in tasks if isinstance(item, dict)]
+        return {"tasks": [], "chats": []}
+    if not isinstance(data, dict):
+        return {"tasks": [], "chats": []}
+    tasks = [item for item in data.get("tasks") or [] if isinstance(item, dict)]
+    chats = [
+        chat
+        for chat in (_clean_chat(raw) for raw in data.get("chats") or [])
+        if chat is not None
+    ]
+    if "chats" not in data and tasks:
+        chats = [_legacy_chat(tasks)]
+    return {"tasks": tasks[:100], "chats": chats[:50]}
 
 
-def _save_history(tasks: list[dict]) -> None:
+def _save_store(tasks: list[dict], chats: list[dict]) -> None:
     path = _history_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_suffix(".tmp")
     temp.write_text(
-        json.dumps({"tasks": tasks[:100]}, ensure_ascii=False, indent=2),
+        json.dumps(
+            {"tasks": tasks[:100], "chats": chats[:50]},
+            ensure_ascii=False,
+            indent=2,
+        ),
         encoding="utf-8",
     )
     os.replace(temp, path)
+
+
+def _load_history() -> list[dict]:
+    return _load_store()["tasks"]
 
 
 def _spent_rub(tasks: list[dict]) -> float:
@@ -317,11 +450,22 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
         usage = state.last_usage or {}
         final = state.final or {}
         async with app.state.history_lock:
-            tasks = _load_history()
+            store = _load_store()
+            tasks = store["tasks"]
+            chats = store["chats"]
+            chat = next(
+                (item for item in chats if item.get("id") == state.chat_id),
+                None,
+            )
+            if chat is None:
+                chat = _new_chat(state.task)
+                chats.insert(0, chat)
+                state.chat_id = chat["id"]
             cost = float(final.get("cost") or usage.get("cost") or 0)
             entry = {
                 "id": uuid.uuid4().hex[:10],
-                "created_at": datetime.now().isoformat(timespec="seconds"),
+                "created_at": _now(),
+                "chat_id": chat["id"],
                 "task": state.task,
                 "answer": str(final.get("answer") or ""),
                 "steps": int(final.get("steps") or usage.get("step") or 0),
@@ -330,7 +474,25 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
                 "stopped_reason": str(final.get("stopped_reason") or "error"),
             }
             tasks.insert(0, entry)
-            _save_history(tasks)
+            message_id = uuid.uuid4().hex[:12]
+            chat["messages"].append(
+                {
+                    "id": message_id,
+                    "role": "assistant",
+                    "text": entry["answer"],
+                    "created_at": entry["created_at"],
+                    "steps": entry["steps"],
+                    "tokens": entry["tokens"],
+                    "cost": entry["cost"],
+                    "stopped_reason": entry["stopped_reason"],
+                    "task_id": entry["id"],
+                }
+            )
+            chat["updated_at"] = entry["created_at"]
+            if chat["title"] in ("", "Новый чат"):
+                chat["title"] = _chat_title(state.task)
+            chats.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+            _save_store(tasks, chats)
             limit = _budget_limit()
             remaining = max(0.0, limit - _spent_rub(tasks))
             entry["budget_limit"] = limit
@@ -338,6 +500,8 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
         state.remembered = True
         if state.final is not None:
             state.final["remaining_rub"] = remaining
+            state.final["chat_id"] = chat["id"]
+            state.final["message_id"] = message_id
         return entry
 
     async def finish(state: TaskState) -> None:
@@ -423,7 +587,10 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
         state.stderr_task = asyncio.create_task(
             _drain_stderr(state.proc.stderr, state.stderr)
         )
-        await _write_command(state.proc, {"type": "run", "task": state.task})
+        await _write_command(
+            state.proc,
+            {"type": "run", "task": state.task, "history": state.history},
+        )
 
     def cancelled_event(state: TaskState) -> dict:
         usage = state.last_usage or {}
@@ -589,20 +756,90 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
 
     @app.get("/api/summary")
     async def summary():
-        tasks = _load_history()
+        store = _load_store()
+        tasks = store["tasks"]
         limit = _budget_limit()
         spent = _spent_rub(tasks)
+        chats = [
+            {
+                "id": chat["id"],
+                "title": chat["title"],
+                "created_at": chat["created_at"],
+                "updated_at": chat["updated_at"],
+                "message_count": len(chat["messages"]),
+            }
+            for chat in store["chats"]
+        ]
         return {
             "budget_limit": round(limit, 2),
             "spent": round(spent, 2),
             "remaining_rub": round(max(0.0, limit - spent), 2),
             "max_steps": int(os.environ.get("MAX_STEPS", "8")),
             "history": tasks[:30],
+            "chats": chats,
         }
 
     @app.get("/api/history")
     async def history():
         return {"tasks": _load_history()[:50]}
+
+    @app.get("/api/chats")
+    async def chats_list():
+        return {"chats": _load_store()["chats"]}
+
+    @app.delete("/api/chats/{chat_id}")
+    async def delete_chat(chat_id: str):
+        async with app.state.history_lock:
+            store = _load_store()
+            removed_chat = next(
+                (chat for chat in store["chats"] if chat.get("id") == chat_id),
+                None,
+            )
+            if removed_chat is None:
+                return JSONResponse({"error": "Чат не найден."}, status_code=404)
+            store["chats"] = [
+                chat for chat in store["chats"] if chat.get("id") != chat_id
+            ]
+            task_ids = {
+                message.get("task_id")
+                for message in removed_chat.get("messages") or []
+                if message.get("task_id")
+            }
+            store["tasks"] = [
+                task
+                for task in store["tasks"]
+                if task.get("chat_id") != chat_id and task.get("id") not in task_ids
+            ]
+            _save_store(store["tasks"], store["chats"])
+        return {"ok": True}
+
+    @app.delete("/api/chats/{chat_id}/messages/{message_id}")
+    async def delete_message(chat_id: str, message_id: str):
+        async with app.state.history_lock:
+            store = _load_store()
+            chat = next(
+                (item for item in store["chats"] if item.get("id") == chat_id),
+                None,
+            )
+            if chat is None:
+                return JSONResponse({"error": "Чат не найден."}, status_code=404)
+            removed = next(
+                (item for item in chat["messages"] if item.get("id") == message_id),
+                None,
+            )
+            if removed is None:
+                return JSONResponse({"error": "Сообщение не найдено."}, status_code=404)
+            chat["messages"] = [
+                item for item in chat["messages"] if item.get("id") != message_id
+            ]
+            task_id = removed.get("task_id")
+            if task_id:
+                store["tasks"] = [
+                    task for task in store["tasks"] if task.get("id") != task_id
+                ]
+            chat["updated_at"] = _now()
+            _save_store(store["tasks"], store["chats"])
+        return {"ok": True, "chat": chat}
 
     @app.post("/api/task")
     async def start_task(payload: TaskIn):
@@ -617,9 +854,54 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
         async with app.state.active_lock:
             if app.state.active is not None:
                 return JSONResponse(
-                    {"error": "Уже выполняется другая задача."}, status_code=409
+                    {"error": "Дождись, пока Омега закончит задачу."}, status_code=409
                 )
-            state = TaskState(task=task)
+            async with app.state.history_lock:
+                store = _load_store()
+                chat = next(
+                    (
+                        item
+                        for item in store["chats"]
+                        if item.get("id") == payload.chat_id
+                    ),
+                    None,
+                )
+                if chat is None:
+                    chat = _new_chat(task)
+                    store["chats"].insert(0, chat)
+                stamp = _now()
+                message_id = uuid.uuid4().hex[:12]
+                chat["messages"].append(
+                    {
+                        "id": message_id,
+                        "role": "user",
+                        "text": task,
+                        "created_at": stamp,
+                    }
+                )
+                chat["updated_at"] = stamp
+                if chat["title"] in ("", "Новый чат"):
+                    chat["title"] = _chat_title(task)
+                store["chats"].sort(
+                    key=lambda item: str(item.get("updated_at") or ""),
+                    reverse=True,
+                )
+                history = [
+                    {
+                        "role": message["role"],
+                        "content": str(message.get("text") or "")[:4000],
+                    }
+                    for message in chat["messages"][:-1][-10:]
+                    if message.get("role") in ("user", "assistant")
+                    and message.get("text")
+                ]
+                _save_store(store["tasks"], store["chats"])
+            state = TaskState(
+                task=task,
+                chat_id=chat["id"],
+                user_message_id=message_id,
+                history=history,
+            )
             app.state.active = state
         return StreamingResponse(
             task_stream(state),

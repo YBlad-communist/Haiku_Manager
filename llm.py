@@ -30,6 +30,7 @@ class LLM:
             api_key=config.AITUNNEL_API_KEY,
             base_url=config.BASE_URL,
         )
+        self.model = config.current_model()
         self.total_prompt_tokens = 0
         self.total_completion_tokens = 0
         self.total_cost = 0.0
@@ -48,7 +49,7 @@ class LLM:
             )
 
         kwargs: dict[str, Any] = {
-            "model": config.MODEL,
+            "model": self.model,
             "max_tokens": config.MAX_TOKENS_PER_REPLY,
             "messages": messages,
             "temperature": 0.2,

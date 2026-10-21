@@ -13,6 +13,8 @@ const state = {
   modalBusy: false,
   settings: null,
   settingsOpen: false,
+  chatId: "",
+  chats: [],
   recordingHotkey: false,
   settingsBusy: false,
   voiceToken: 0,
@@ -70,10 +72,9 @@ const els = {
   autostartToggle: document.getElementById("autostartToggle"),
   budgetInput: document.getElementById("budgetInput"),
   voiceLanguage: document.getElementById("voiceLanguage"),
-  allowedFolders: document.getElementById("allowedFolders"),
-  allowedApps: document.getElementById("allowedApps"),
-  addFolder: document.getElementById("addFolder"),
-  addApp: document.getElementById("addApp"),
+  modelSelect: document.getElementById("modelSelect"),
+  themeSelect: document.getElementById("themeSelect"),
+  systemPrompt: document.getElementById("systemPrompt"),
   voiceCircle: document.getElementById("voiceCircle"),
   voiceBars: document.getElementById("voiceBars"),
   voiceTitle: document.getElementById("voiceTitle"),
@@ -100,7 +101,6 @@ const TOOL_LABELS = {
   search_companies_2gis: "Ищу компании в 2ГИС",
   draft_message: "Готовлю черновик",
   send_message: "Проверяю отправку",
-  list_allowed: "Смотрю разрешённые места",
   list_files: "Смотрю файлы",
   read_file: "Читаю файл",
   write_file: "Записываю файл",
@@ -430,17 +430,25 @@ function createAssistantCard(title = "Работаю над задачей") {
   const node = els.assistantTpl.content.firstElementChild.cloneNode(true);
   const titleNode = node.querySelector(".assistant-title");
   titleNode.textContent = title;
-  const stopButton = node.querySelector(".stop-btn");
+  const stopButton = node.querySelector(".stop-btn:not(.msg-delete)");
   stopButton.hidden = true;
+  const deleteButton = node.querySelector(".msg-delete");
+  deleteButton.hidden = true;
   const refs = {
     card: node,
     title: titleNode,
     stop: stopButton,
+    remove: deleteButton,
     steps: node.querySelector(".steps"),
     foot: node.querySelector(".card-foot"),
     answer: node.querySelector(".answer"),
   };
   stopButton.addEventListener("click", stopTask);
+  deleteButton.addEventListener("click", () => {
+    if (deleteButton.dataset.messageId) {
+      deleteMessage(deleteButton.dataset.chatId || state.chatId, deleteButton.dataset.messageId);
+    }
+  });
   els.feed.append(node);
   scrollFeed();
   return { refs, pending: [], finalReceived: false };
@@ -578,6 +586,15 @@ function finishCard(event) {
   currentCard.refs.foot.textContent =
     `Шаг ${steps} из ${state.maxSteps} · ${formatCost(cost)}`;
 
+  if (event.chat_id) {
+    state.chatId = String(event.chat_id);
+  }
+  if (event.message_id) {
+    currentCard.refs.remove.hidden = false;
+    currentCard.refs.remove.dataset.messageId = String(event.message_id);
+    currentCard.refs.remove.dataset.chatId = state.chatId;
+  }
+
   const answer = String(event.answer || "").trim() || "Готово.";
   currentCard.refs.answer.hidden = false;
   currentCard.refs.answer.classList.toggle(
@@ -596,6 +613,7 @@ function finishCard(event) {
 
   currentCard = null;
   refreshSummary();
+  loadChats();
   els.input.focus();
   scrollFeed();
 }
@@ -622,6 +640,7 @@ function failCard(card, message) {
 
 function setRunning(running) {
   els.send.disabled = running;
+  els.mic.disabled = running;
   els.newTask.disabled = false;
 }
 
@@ -629,7 +648,7 @@ async function streamTask(task) {
   const response = await fetch(api("/api/task"), {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ task }),
+    body: JSON.stringify({ task, chat_id: state.chatId }),
   });
 
   if (!response.ok) {
@@ -734,49 +753,122 @@ async function stopTask() {
   }
 }
 
-function renderRecent(tasks) {
+function renderRecent(chats) {
   els.recent.replaceChildren();
-  if (!tasks || !tasks.length) {
+  if (!chats || !chats.length) {
     const empty = document.createElement("p");
     empty.className = "recent-empty";
     empty.textContent = "Пока пусто.";
     els.recent.append(empty);
     return;
   }
-  for (const item of tasks.slice(0, 8)) {
+  for (const chat of chats.slice(0, 30)) {
+    const row = document.createElement("div");
+    row.className = "recent-row";
     const button = document.createElement("button");
     button.type = "button";
     button.className = "ci recent-item";
-    button.textContent = truncate(item.task);
-    button.title = item.task || "";
-    button.addEventListener("click", () => showHistory(item));
-    els.recent.append(button);
+    button.classList.toggle("active", chat.id === state.chatId);
+    button.textContent = truncate(chat.title || "Новый чат", 32);
+    button.title = chat.title || "";
+    button.addEventListener("click", () => showChat(chat.id));
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "ci recent-delete";
+    remove.textContent = "×";
+    remove.title = "Удалить чат";
+    remove.setAttribute("aria-label", `Удалить чат ${chat.title || ""}`);
+    remove.addEventListener("click", () => deleteChat(chat.id));
+    row.append(button, remove);
+    els.recent.append(row);
   }
 }
 
-function showHistory(item) {
+function renderHistoryMessage(message, chatId) {
+  if (message.role === "user") {
+    addUserMessage(message.text || "");
+    return;
+  }
+  const card = document.createElement("article");
+  card.className = "assistant cl";
+  const head = document.createElement("div");
+  head.className = "assistant-head";
+  const title = document.createElement("h2");
+  title.className = "assistant-title";
+  const reason = message.stopped_reason || "done";
+  title.textContent =
+    reason === "done" || reason === "max_steps"
+      ? "Готово"
+      : reason === "cancelled"
+        ? "Остановлено"
+        : "Задача завершена";
+  const actions = document.createElement("div");
+  actions.className = "assistant-actions";
+  if (message.task_id && message.id) {
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "ci stop-btn";
+    remove.textContent = "Удалить";
+    remove.title = "Удалить задачу";
+    remove.addEventListener("click", () => deleteMessage(chatId, message.id));
+    actions.append(remove);
+  }
+  head.append(title, actions);
+  const answer = document.createElement("div");
+  answer.className = "answer";
+  if (reason === "done" || reason === "max_steps") {
+    renderMarkdown(answer, message.text || "Готово.");
+  } else {
+    answer.textContent = message.text || "Готово.";
+    answer.classList.add("error");
+  }
+  const foot = document.createElement("p");
+  foot.className = "card-foot";
+  foot.textContent =
+    `${Number(message.steps || 0)} шаг(ов) · ${formatCost(message.cost || 0)} · ${formatDate(message.created_at)}`;
+  card.append(head, answer, foot);
+  els.feed.append(card);
+}
+
+function showChat(chatId) {
   if (state.running) {
     showToast("Сначала дождись конца текущей задачи или нажми «Стоп».");
     return;
   }
+  const chat = state.chats.find((item) => item.id === chatId);
+  if (!chat) {
+    return;
+  }
+  state.chatId = chat.id;
   els.feed.replaceChildren();
-  addUserMessage(item.task || "");
-  const card = document.createElement("article");
-  card.className = "assistant cl";
-  const title = document.createElement("h2");
-  title.className = "assistant-title";
-  title.textContent = "Прошлая задача";
-  const answer = document.createElement("div");
-  answer.className = "answer";
-  renderMarkdown(answer, item.answer || "Ответ не сохранился.");
-  const foot = document.createElement("p");
-  foot.className = "card-foot";
-  foot.textContent =
-    `${Number(item.steps || 0)} шаг(ов) · ${formatCost(item.cost || 0)} · ${formatDate(item.created_at)}`;
-  card.append(title, answer, foot);
-  els.feed.append(card);
+  for (const message of chat.messages || []) {
+    renderHistoryMessage(message, chat.id);
+  }
+  renderRecent(state.chats);
   scrollFeed();
   els.input.focus();
+}
+
+async function loadChats(selectLatest = false) {
+  try {
+    const data = await apiJson("/api/chats");
+    state.chats = Array.isArray(data.chats) ? data.chats : [];
+    renderRecent(state.chats);
+    if (selectLatest && !state.chatId && state.chats.length) {
+      const latest = state.chats[0];
+      state.chatId = latest.id;
+      els.feed.replaceChildren();
+      for (const message of latest.messages || []) {
+        renderHistoryMessage(message, latest.id);
+      }
+      renderRecent(state.chats);
+    }
+    if (state.chatId && !state.chats.some((chat) => chat.id === state.chatId)) {
+      state.chatId = "";
+    }
+  } catch (error) {
+    showToast(`Не удалось загрузить чаты: ${error.message}`);
+  }
 }
 
 async function refreshSummary() {
@@ -784,9 +876,54 @@ async function refreshSummary() {
     const data = await apiJson("/api/summary");
     state.maxSteps = Number(data.max_steps || 8);
     els.budgetValue.textContent = formatRub(data.remaining_rub, 2);
-    renderRecent(data.history || []);
   } catch (error) {
     showToast(`Не удалось загрузить историю: ${error.message}`);
+  }
+}
+
+async function deleteChat(chatId) {
+  if (state.running) {
+    showToast("Сначала дождись конца задачи.");
+    return;
+  }
+  if (!window.confirm("Удалить этот чат вместе с задачами?")) {
+    return;
+  }
+  try {
+    await apiJson(`/api/chats/${encodeURIComponent(chatId)}`, { method: "DELETE" });
+    if (state.chatId === chatId) {
+      state.chatId = "";
+      els.feed.replaceChildren();
+    }
+    await loadChats();
+    await refreshSummary();
+    showToast("Чат удалён.");
+  } catch (error) {
+    showToast(error.message || "Не удалось удалить чат.");
+  }
+}
+
+async function deleteMessage(chatId, messageId) {
+  if (state.running) {
+    showToast("Сначала дождись конца задачи.");
+    return;
+  }
+  if (!window.confirm("Удалить эту задачу?")) {
+    return;
+  }
+  try {
+    await apiJson(
+      `/api/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}`,
+      { method: "DELETE" },
+    );
+    await loadChats();
+    await refreshSummary();
+    if (state.chatId === chatId) {
+      showChat(chatId);
+    }
+    showToast("Задача удалена.");
+  } catch (error) {
+    showToast(error.message || "Не удалось удалить задачу.");
   }
 }
 
@@ -1163,7 +1300,12 @@ async function transcribeVoiceBlob(blob, token) {
     }
     insertVoiceText(text);
     closeVoice();
-    showToast("Голос распознан.");
+    if (state.running) {
+      showToast("Голос распознан. Дождись конца текущей задачи.");
+    } else {
+      showToast("Голос распознан, отправляю…");
+      submitTask();
+    }
   } catch (error) {
     if (error.name === "AbortError" || token !== state.voiceToken) {
       return;
@@ -1314,6 +1456,10 @@ async function openVoice() {
   if (!els.voice.hidden) {
     return;
   }
+  if (state.running) {
+    showToast("Дождись конца текущей задачи.");
+    return;
+  }
   if (!els.modal.hidden) {
     showToast("Сначала ответь на подтверждение.");
     return;
@@ -1462,52 +1608,9 @@ function clearSettingsError() {
   els.settingsError.hidden = true;
 }
 
-function renderAllowList(listElement, paths, kind) {
-  listElement.replaceChildren();
-  if (!paths.length) {
-    const empty = document.createElement("li");
-    empty.className = "allow-empty";
-    empty.textContent =
-      kind === "folder"
-        ? "Пока нет разрешённых папок."
-        : "Пока нет разрешённых программ.";
-    listElement.append(empty);
-    return;
-  }
-  for (const item of paths) {
-    const row = document.createElement("li");
-    row.className = "allow-item";
-    const pathText = document.createElement("span");
-    pathText.className = "allow-path";
-    pathText.textContent = item;
-    pathText.title = item;
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.className = "ci allow-remove";
-    remove.textContent = "×";
-    remove.dataset.kind = kind;
-    remove.dataset.path = item;
-    remove.setAttribute(
-      "aria-label",
-      kind === "folder" ? `Убрать папку ${item}` : `Убрать программу ${item}`,
-    );
-    row.append(pathText, remove);
-    listElement.append(row);
-  }
-}
-
-function renderAllowedLists() {
-  if (!state.settings) {
-    return;
-  }
-  const folders = Array.isArray(state.settings.allowed_folders)
-    ? state.settings.allowed_folders
-    : [];
-  const apps = Array.isArray(state.settings.allowed_apps)
-    ? state.settings.allowed_apps
-    : [];
-  renderAllowList(els.allowedFolders, folders, "folder");
-  renderAllowList(els.allowedApps, apps, "app");
+function applyTheme(value) {
+  const theme = value === "dark" ? "dark" : "light";
+  document.documentElement.dataset.theme = theme;
 }
 
 function applySettingsToUi() {
@@ -1529,7 +1632,21 @@ function applySettingsToUi() {
   if (document.activeElement !== els.voiceLanguage) {
     els.voiceLanguage.value = voiceLanguage;
   }
-  renderAllowedLists();
+  const model = ["deepseek-v4.1-flash", "glm-5.3-flash", "gpt-6-luna", "claude-haiku-5.5"]
+    .includes(state.settings.model)
+    ? state.settings.model
+    : "claude-haiku-5.5";
+  if (document.activeElement !== els.modelSelect) {
+    els.modelSelect.value = model;
+  }
+  const theme = state.settings.theme === "dark" ? "dark" : "light";
+  if (document.activeElement !== els.themeSelect) {
+    els.themeSelect.value = theme;
+  }
+  applyTheme(theme);
+  if (document.activeElement !== els.systemPrompt) {
+    els.systemPrompt.value = state.settings.system_prompt || "";
+  }
 }
 
 async function saveSettingsPatch(patch) {
@@ -1694,63 +1811,60 @@ async function saveVoiceLanguage() {
   }
 }
 
-async function addAllowedPath(kind) {
+async function saveModel() {
   if (!state.settings || state.settingsBusy) {
     return;
   }
-  const isFolder = kind === "folder";
-  const key = isFolder ? "allowed_folders" : "allowed_apps";
-  const picker = isFolder ? window.omega.pickFolder : window.omega.pickApp;
-  if (typeof picker !== "function") {
-    showSettingsError("Приложение не умеет выбирать пути.");
+  const value = els.modelSelect.value;
+  if (!["deepseek-v4.1-flash", "glm-5.3-flash", "gpt-6-luna", "claude-haiku-5.5"].includes(value)) {
+    applySettingsToUi();
     return;
   }
-  let picked = null;
-  try {
-    picked = await picker();
-  } catch (error) {
-    showSettingsError(error.message || "Не удалось выбрать путь.");
-    return;
-  }
-  if (!picked) {
-    return;
-  }
-  const current = Array.isArray(state.settings[key]) ? state.settings[key] : [];
-  const pickedKey = String(picked).toLowerCase();
-  if (current.some((item) => String(item).toLowerCase() === pickedKey)) {
-    showToast(
-      isFolder ? "Эта папка уже разрешена." : "Эта программа уже разрешена.",
-    );
+  if (value === state.settings.model) {
     return;
   }
   state.settingsBusy = true;
-  const ok = await saveSettingsPatch({ [key]: [...current, picked] });
+  const ok = await saveSettingsPatch({ model: value });
   state.settingsBusy = false;
   if (ok) {
-    showToast(isFolder ? "Папка разрешена." : "Программа разрешена.");
+    showToast("Модель сохранена.");
+  } else {
+    applySettingsToUi();
   }
 }
 
-async function removeAllowedPath(kind, pathValue) {
+async function saveTheme() {
   if (!state.settings || state.settingsBusy) {
     return;
   }
-  const key = kind === "folder" ? "allowed_folders" : "allowed_apps";
-  const current = Array.isArray(state.settings[key]) ? state.settings[key] : [];
-  const removeKey = String(pathValue).toLowerCase();
-  const next = current.filter((item) => String(item).toLowerCase() !== removeKey);
-  if (next.length === current.length) {
+  const value = els.themeSelect.value === "dark" ? "dark" : "light";
+  applyTheme(value);
+  if (value === state.settings.theme) {
     return;
   }
   state.settingsBusy = true;
-  const ok = await saveSettingsPatch({ [key]: next });
+  const ok = await saveSettingsPatch({ theme: value });
+  state.settingsBusy = false;
+  if (!ok) {
+    applySettingsToUi();
+  }
+}
+
+async function saveSystemPrompt() {
+  if (!state.settings || state.settingsBusy) {
+    return;
+  }
+  const value = els.systemPrompt.value.trim();
+  if (value === (state.settings.system_prompt || "")) {
+    return;
+  }
+  state.settingsBusy = true;
+  const ok = await saveSettingsPatch({ system_prompt: value });
   state.settingsBusy = false;
   if (ok) {
-    showToast(
-      kind === "folder"
-        ? "Папка убрана из разрешённых."
-        : "Программа убрана из разрешённых.",
-    );
+    showToast("Системный промт сохранён.");
+  } else {
+    applySettingsToUi();
   }
 }
 
@@ -1782,8 +1896,10 @@ function bindEvents() {
       showToast("Сначала дождись конца задачи или нажми «Стоп».");
       return;
     }
+    state.chatId = "";
     els.feed.replaceChildren();
     currentCard = null;
+    renderRecent(state.chats);
     els.input.focus();
   });
 
@@ -1807,18 +1923,11 @@ function bindEvents() {
   els.settingsBtn.addEventListener("click", openSettings);
   els.settingsClose.addEventListener("click", closeSettings);
   els.settingsDone.addEventListener("click", closeSettings);
-  els.settings.addEventListener("click", async (event) => {
+  els.settings.addEventListener("click", (event) => {
     if (event.target === els.settings) {
       closeSettings();
-      return;
-    }
-    const removeButton = event.target.closest(".allow-remove");
-    if (removeButton) {
-      await removeAllowedPath(removeButton.dataset.kind, removeButton.dataset.path);
     }
   });
-  els.addFolder.addEventListener("click", () => addAllowedPath("folder"));
-  els.addApp.addEventListener("click", () => addAllowedPath("app"));
 
   els.hotkeyInput.addEventListener("click", startHotkeyCapture);
   els.hotkeyInput.addEventListener("blur", () => stopHotkeyCapture(true));
@@ -1858,6 +1967,9 @@ function bindEvents() {
   });
   els.budgetInput.addEventListener("blur", saveBudget);
   els.voiceLanguage.addEventListener("change", saveVoiceLanguage);
+  els.modelSelect.addEventListener("change", saveModel);
+  els.themeSelect.addEventListener("change", saveTheme);
+  els.systemPrompt.addEventListener("blur", saveSystemPrompt);
 
   document.addEventListener("keydown", (event) => {
     if (event.key === "Tab") {
@@ -1949,6 +2061,7 @@ async function init() {
       state.settings = null;
     }
     await refreshSummary();
+    await loadChats(true);
     els.input.focus();
   } catch (error) {
     const card = createAssistantCard("Ошибка запуска");

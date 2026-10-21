@@ -3,49 +3,38 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
+const MODELS = [
+  { id: "deepseek-v4.1-flash", label: "DEEPSEEK V4.1 Flash" },
+  { id: "glm-5.3-flash", label: "GLM 5.3 Flash" },
+  { id: "gpt-6-luna", label: "GPT 6 Luna" },
+  { id: "claude-haiku-5.5", label: "Haiku 5.5" },
+];
+const MODEL_IDS = new Set(MODELS.map((item) => item.id));
+const PROMPT_LIMIT = 20_000;
+
 const DEFAULTS = {
   hotkey: "CommandOrControl+Space",
   autostart: false,
   budget_limit_rub: 500,
   voice_language: "ru",
-  allowed_folders: [],
-  allowed_apps: [],
+  model: "claude-haiku-5.5",
+  system_prompt: "",
+  theme: "light",
 };
 
 function settingsPath(projectRoot) {
   return path.join(projectRoot, "data", "settings.json");
 }
 
-function cleanPathList(value, limit = 50) {
-  if (!Array.isArray(value)) {
-    return [];
+function readDefaultPrompt(projectRoot) {
+  try {
+    return fs.readFileSync(
+      path.join(projectRoot, "prompts", "omega.md"),
+      "utf8",
+    ).trim();
+  } catch {
+    return "";
   }
-  const result = [];
-  const seen = new Set();
-  for (const item of value) {
-    if (typeof item !== "string") {
-      continue;
-    }
-    const raw = item.trim();
-    if (!raw || !path.isAbsolute(raw)) {
-      continue;
-    }
-    let text = path.normalize(raw);
-    const root = path.parse(text).root;
-    if (text.length > root.length) {
-      text = text.replace(/[\\/]+$/, "");
-    }
-    const key = process.platform === "win32" ? text.toLowerCase() : text;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    result.push(text);
-    if (result.length >= limit) {
-      break;
-    }
-  }
-  return result;
 }
 
 function sanitizeSettings(value, base = DEFAULTS) {
@@ -62,13 +51,33 @@ function sanitizeSettings(value, base = DEFAULTS) {
   const voiceLanguage = ["ru", "en", "auto"].includes(source.voice_language)
     ? source.voice_language
     : base.voice_language || "ru";
+  const model = MODEL_IDS.has(source.model)
+    ? source.model
+    : MODEL_IDS.has(base.model)
+      ? base.model
+      : DEFAULTS.model;
+  const hasPrompt = Object.prototype.hasOwnProperty.call(source, "system_prompt");
+  const systemPrompt = hasPrompt
+    ? typeof source.system_prompt === "string"
+      ? source.system_prompt.trim().slice(0, PROMPT_LIMIT)
+      : ""
+    : typeof base.system_prompt === "string"
+      ? base.system_prompt
+      : "";
+  const theme =
+    source.theme === "dark" || source.theme === "light"
+      ? source.theme
+      : base.theme === "dark"
+        ? "dark"
+        : "light";
   return {
     hotkey,
     autostart: Boolean(source.autostart),
     budget_limit_rub: budget,
     voice_language: voiceLanguage,
-    allowed_folders: cleanPathList(source.allowed_folders),
-    allowed_apps: cleanPathList(source.allowed_apps),
+    model,
+    system_prompt: systemPrompt,
+    theme,
   };
 }
 
@@ -77,6 +86,7 @@ function loadSettings(projectRoot, legacyHotkey = "") {
   const defaults = {
     ...DEFAULTS,
     hotkey: legacyHotkey || DEFAULTS.hotkey,
+    system_prompt: readDefaultPrompt(projectRoot),
   };
   let parsed = null;
   try {
@@ -87,6 +97,9 @@ function loadSettings(projectRoot, legacyHotkey = "") {
     }
   }
   const settings = sanitizeSettings(parsed || {}, defaults);
+  if (!settings.system_prompt) {
+    settings.system_prompt = readDefaultPrompt(projectRoot);
+  }
   if (!parsed) {
     try {
       saveSettings(projectRoot, settings);
@@ -100,6 +113,9 @@ function loadSettings(projectRoot, legacyHotkey = "") {
 function saveSettings(projectRoot, settings) {
   const file = settingsPath(projectRoot);
   const clean = sanitizeSettings(settings);
+  if (!clean.system_prompt) {
+    clean.system_prompt = readDefaultPrompt(projectRoot);
+  }
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const temp = `${file}.tmp`;
   fs.writeFileSync(temp, `${JSON.stringify(clean, null, 2)}\n`, "utf8");
@@ -109,7 +125,7 @@ function saveSettings(projectRoot, settings) {
 
 module.exports = {
   DEFAULTS,
-  cleanPathList,
+  MODELS,
   loadSettings,
   saveSettings,
   sanitizeSettings,
