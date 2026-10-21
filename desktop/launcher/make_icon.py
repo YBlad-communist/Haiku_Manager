@@ -44,8 +44,8 @@ base.alpha_composite(highlight)
 canvas.alpha_composite(base)
 
 font_path = Path("C:/Windows/Fonts/segoeuib.ttf")
-font = ImageFont.truetype(str(font_path), 560)
-letter = "Д"
+font = ImageFont.truetype(str(font_path), 620)
+letter = "Ω"
 left, top, right, bottom = font.getbbox(letter)
 letter_width = right - left
 letter_height = bottom - top
@@ -72,4 +72,6 @@ icon.save(
     ASSETS / "icon.ico",
     sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)],
 )
+for size in (16, 32):
+    icon.resize((size, size), Image.LANCZOS).save(ASSETS / f"tray-{size}.png")
 print(ASSETS / "icon.ico")

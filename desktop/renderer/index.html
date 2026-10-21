@@ -4,15 +4,25 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
-  <title>Джарвис</title>
+  <title>Омега (Ω)</title>
   <link rel="stylesheet" href="nunito.css">
   <link rel="stylesheet" href="styles.css">
+  <script src="vendor/markdown-it.min.js" defer></script>
+  <script src="vendor/purify.min.js" defer></script>
   <script src="app.js" defer></script>
 </head>
 <body>
   <div class="app" id="app">
     <aside class="sidebar cl">
-      <h1 class="brand">Джарвис</h1>
+      <div class="brand-row">
+        <h1 class="brand">Омега <span class="brand-glyph" aria-hidden="true">Ω</span></h1>
+        <button type="button" class="ci icon-btn brand-btn" id="settingsBtn" aria-label="Настройки" title="Настройки">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"></path>
+            <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.55 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.55-1.1 1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.14.37.49.63.9.7H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1.3Z"></path>
+          </svg>
+        </button>
+      </div>
       <button type="button" class="bt new-task" id="newTask">Новая задача</button>
       <p class="label">Недавние</p>
       <div class="recent" id="recent"></div>
@@ -63,6 +73,78 @@
     </div>
   </div>
 
+  <div class="overlay settings-screen" id="settings" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" hidden>
+    <section class="settings cl">
+      <header class="settings-head">
+        <div>
+          <h2 id="settingsTitle">Настройки</h2>
+          <p class="settings-sub">Изменения сохраняются сразу</p>
+        </div>
+        <button type="button" class="ci icon-btn" id="settingsClose" aria-label="Закрыть настройки">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M6 6l12 12"></path>
+            <path d="M18 6 6 18"></path>
+          </svg>
+        </button>
+      </header>
+
+      <div class="settings-body">
+        <section class="setting">
+          <div class="setting-text">
+            <h3>Горячая клавиша</h3>
+            <p>Нажми на поле и введи новое сочетание. Esc — отмена.</p>
+          </div>
+          <input class="ci hotkey-input" id="hotkeyInput" type="text" readonly
+                 aria-label="Горячая клавиша" spellcheck="false" autocomplete="off">
+        </section>
+
+        <section class="setting">
+          <div class="setting-text">
+            <h3>Автозапуск с Windows</h3>
+            <p>Омега запустится сразу в трей, без окна.</p>
+          </div>
+          <button type="button" class="switch ci" id="autostartToggle" role="switch" aria-checked="false" aria-label="Автозапуск с Windows">
+            <span class="switch-knob"></span>
+          </button>
+        </section>
+
+        <section class="setting">
+          <div class="setting-text">
+            <h3>Лимит бюджета</h3>
+            <p>Сколько рублей можно потратить по ключу модели.</p>
+          </div>
+          <div class="budget-field">
+            <input class="ci budget-input" id="budgetInput" type="number" min="0" max="1000000" step="10"
+                   inputmode="decimal" aria-label="Лимит бюджета в рублях">
+            <span class="budget-unit">₽</span>
+          </div>
+        </section>
+
+        <section class="setting placeholder-setting">
+          <div class="setting-text">
+            <h3>Разрешённые папки</h3>
+            <p>Появится на этапе C. Здесь будут папки, внутри которых Омеге можно работать.</p>
+          </div>
+          <span class="soon-chip ci">Скоро</span>
+        </section>
+
+        <section class="setting placeholder-setting">
+          <div class="setting-text">
+            <h3>Разрешённые приложения</h3>
+            <p>Появится на этапе C. Здесь будет список программ, которые можно запускать.</p>
+          </div>
+          <span class="soon-chip ci">Скоро</span>
+        </section>
+
+        <p class="settings-error" id="settingsError" role="alert" hidden></p>
+      </div>
+
+      <footer class="settings-foot">
+        <button type="button" class="bt btn-accent" id="settingsDone">Готово</button>
+      </footer>
+    </section>
+  </div>
+
   <div class="overlay voice-screen" id="voice" role="dialog" aria-modal="true" aria-labelledby="voiceTitle" tabindex="-1" hidden>
     <div class="voice">
       <div class="voice-circle cl">
@@ -76,7 +158,7 @@
       </div>
       <p class="voice-title" id="voiceTitle">Слушаю…</p>
       <div class="voice-text cl">Голос скоро появится</div>
-      <p class="voice-hint">Отпусти Ctrl+Space, чтобы отправить · Esc — отмена</p>
+      <p class="voice-hint">Голосовой ввод появится на этапе B · Esc — закрыть</p>
     </div>
   </div>
 

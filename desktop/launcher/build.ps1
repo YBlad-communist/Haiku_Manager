@@ -3,7 +3,7 @@
 $project = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $csc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 $icon = Join-Path $project "desktop\assets\icon.ico"
-$appName = -join (0x0414, 0x0436, 0x0430, 0x0440, 0x0432, 0x0438, 0x0441 | ForEach-Object { [char]$_ })
+$appName = -join (0x041E, 0x043C, 0x0435, 0x0433, 0x0430 | ForEach-Object { [char]$_ })
 $target = Join-Path $project ($appName + ".exe")
 
 if (-not (Test-Path $csc)) {
@@ -15,7 +15,7 @@ if (-not (Test-Path $icon)) {
     & py -3.14 (Join-Path $PSScriptRoot "make_icon.py")
 }
 
-$temp = Join-Path $env:TEMP ("jarvis_launcher_" + [guid]::NewGuid().ToString("N") + ".exe")
+$temp = Join-Path $env:TEMP ("omega_launcher_" + [guid]::NewGuid().ToString("N") + ".exe")
 $arguments = @(
     "/nologo",
     "/target:winexe",
@@ -50,7 +50,7 @@ $shortcut = $shell.CreateShortcut($shortcutPath)
 $shortcut.TargetPath = $target
 $shortcut.WorkingDirectory = $project
 $shortcut.IconLocation = "$target,0"
-$shortcut.Description = "Jarvis - local assistant"
+$shortcut.Description = "Omega - local personal assistant"
 $shortcut.Save()
 
 Write-Host ""

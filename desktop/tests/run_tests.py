@@ -28,14 +28,14 @@ def check(name: str, condition: bool, detail: str = "") -> None:
 
 class Server:
     def __init__(self) -> None:
-        self.history_file = Path(tempfile.gettempdir()) / f"jarvis_history_{os.getpid()}.json"
+        self.history_file = Path(tempfile.gettempdir()) / f"omega_history_{os.getpid()}.json"
         if self.history_file.exists():
             self.history_file.unlink()
         env = {
             **os.environ,
-            "JARVIS_TOKEN": TOKEN,
-            "JARVIS_TEST_WORKER": "1",
-            "JARVIS_HISTORY_FILE": str(self.history_file),
+            "OMEGA_TOKEN": TOKEN,
+            "OMEGA_TEST_WORKER": "1",
+            "OMEGA_HISTORY_FILE": str(self.history_file),
             "BUDGET_LIMIT_RUB": "500",
             "PYTHONIOENCODING": "utf-8",
             "PYTHONUTF8": "1",
@@ -70,7 +70,7 @@ class Server:
                 if self.proc.poll() is not None:
                     break
                 continue
-            if name == "out" and line.startswith("JARVIS_PORT="):
+            if name == "out" and line.startswith("OMEGA_PORT="):
                 port = int(line.split("=", 1)[1])
                 self.port = port
                 self.wait_ready(port)

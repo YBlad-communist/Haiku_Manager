@@ -68,14 +68,26 @@ class TaskState:
 
 
 def _history_path() -> Path:
-    override = os.environ.get("JARVIS_HISTORY_FILE")
+    override = os.environ.get("OMEGA_HISTORY_FILE")
     return Path(override) if override else PROJECT_ROOT / "data" / "history.json"
 
 
+def _settings_path() -> Path:
+    return PROJECT_ROOT / "data" / "settings.json"
+
+
 def _budget_limit() -> float:
+    override = os.environ.get("BUDGET_LIMIT_RUB")
+    if override is not None:
+        try:
+            return max(0.0, float(override))
+        except ValueError:
+            pass
     try:
-        return max(0.0, float(os.environ.get("BUDGET_LIMIT_RUB", "500")))
-    except ValueError:
+        data = json.loads(_settings_path().read_text(encoding="utf-8"))
+        value = float(data.get("budget_limit_rub", 500))
+        return max(0.0, value)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return 500.0
 
 
@@ -258,7 +270,7 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
         env = {
             key: value
             for key, value in os.environ.items()
-            if key not in ("JARVIS_TOKEN", "JARVIS_TEST_WORKER")
+            if key not in ("OMEGA_TOKEN", "OMEGA_TEST_WORKER")
         }
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUTF8"] = "1"
@@ -370,7 +382,7 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
 
     @app.get("/api/health")
     async def health():
-        return {"ok": True, "version": "0.1"}
+        return {"ok": True, "version": "0.2"}
 
     @app.get("/api/summary")
     async def summary():
@@ -480,10 +492,10 @@ def _free_socket() -> socket.socket:
 
 
 def main() -> int:
-    token = os.environ.get("JARVIS_TOKEN", "")
+    token = os.environ.get("OMEGA_TOKEN", "")
     if len(token) < 32:
         print(
-            "JARVIS_TOKEN не задан или слишком короткий. "
+            "OMEGA_TOKEN не задан или слишком короткий. "
             "Сервер запускает только приложение.",
             file=sys.stderr,
         )
@@ -494,7 +506,7 @@ def main() -> int:
     app = create_app(
         token=token,
         port=port,
-        test_worker=os.environ.get("JARVIS_TEST_WORKER") == "1",
+        test_worker=os.environ.get("OMEGA_TEST_WORKER") == "1",
     )
     config = uvicorn.Config(
         app,
@@ -505,7 +517,7 @@ def main() -> int:
     )
     server = uvicorn.Server(config)
     app.state.uvicorn_server = server
-    print(f"JARVIS_PORT={port}", flush=True)
+    print(f"OMEGA_PORT={port}", flush=True)
     server.run(sockets=[sock])
     return 0
 

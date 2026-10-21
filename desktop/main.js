@@ -1,4 +1,4 @@
-// Главный процесс Electron: запускает Python-сервер, создаёт окно,
+// Главный процесс Electron: запускает Python-сервер, создаёт окно и трей,
 // держит горячую клавишу и гасит сервер вместе с воркером при выходе.
 
 const {
@@ -8,13 +8,20 @@ const {
   globalShortcut,
   ipcMain,
   Menu,
+  nativeImage,
   session,
   shell,
+  Tray,
 } = require("electron");
 const { execFileSync, spawn } = require("node:child_process");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
+const {
+  loadSettings,
+  sanitizeSettings,
+  saveSettings,
+} = require("./settings");
 
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 const DEFAULT_CONFIG = {
@@ -52,10 +59,21 @@ function readConfig() {
 
 const CONFIG = readConfig();
 const TOKEN = crypto.randomBytes(32).toString("hex");
+const START_HIDDEN = process.argv.includes("--hidden");
 
+app.setName("Омега");
 if (process.platform === "win32") {
-  app.setAppUserModelId("ru.haiku.jarvis");
+  app.setAppUserModelId("ru.haiku.omega");
 }
+try {
+  const userData = path.join(app.getPath("appData"), "Omega");
+  fs.mkdirSync(userData, { recursive: true });
+  app.setPath("userData", userData);
+} catch (error) {
+  console.error("Не удалось задать папку данных Omega:", error.message);
+}
+
+let SETTINGS = loadSettings(PROJECT_ROOT, CONFIG.hotkey);
 
 // py.exe на Windows запускает python.exe дочерним процессом. Если убить
 // обёртку, сервер останется жить, поэтому сразу получаем путь к самому Python.
@@ -83,11 +101,13 @@ function resolvePython(config) {
 const PYTHON = resolvePython(CONFIG);
 
 let mainWindow = null;
+let tray = null;
 let serverProcess = null;
 let serverOutput = "";
 let apiBase = "";
 let isQuitting = false;
 let shutdownPromise = null;
+let currentHotkey = "";
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -99,7 +119,7 @@ function startServer() {
     const script = path.join(__dirname, "server", "app.py");
     const env = {
       ...process.env,
-      JARVIS_TOKEN: TOKEN,
+      OMEGA_TOKEN: TOKEN,
       PYTHONIOENCODING: "utf-8",
       PYTHONUTF8: "1",
     };
@@ -146,7 +166,7 @@ function startServer() {
       const lines = serverOutput.split(/\r?\n/);
       serverOutput = lines.pop() || "";
       for (const line of lines) {
-        const match = /^JARVIS_PORT=(\d+)$/.exec(line.trim());
+        const match = /^OMEGA_PORT=(\d+)$/.exec(line.trim());
         if (match && !settled) {
           settled = true;
           clearTimeout(timer);
@@ -173,7 +193,7 @@ function startServer() {
           "Сервер остановился",
           `Python-сервер завершился с кодом ${code}. Приложение будет закрыто.`,
         );
-        app.quit();
+        requestQuit();
       }
     });
   });
@@ -202,7 +222,7 @@ function createWindow() {
     height: 640,
     center: true,
     show: false,
-    title: "Джарвис",
+    title: "Омега (Ω)",
     icon: path.join(__dirname, "assets", "icon.ico"),
     backgroundColor: "#E4DFF7",
     webPreferences: {
@@ -217,8 +237,18 @@ function createWindow() {
   mainWindow.loadURL(`${apiBase}/index.html`);
 
   mainWindow.once("ready-to-show", () => {
-    mainWindow.show();
-    mainWindow.focus();
+    if (!START_HIDDEN && !isQuitting) {
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+
+  mainWindow.on("close", (event) => {
+    if (isQuitting) {
+      return;
+    }
+    event.preventDefault();
+    mainWindow.hide();
   });
 
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
@@ -253,7 +283,7 @@ function createWindow() {
   });
 }
 
-function showWindow() {
+function showWindow(focusInput = true) {
   if (!mainWindow) {
     return;
   }
@@ -262,18 +292,186 @@ function showWindow() {
   }
   mainWindow.show();
   mainWindow.focus();
-  mainWindow.webContents.send("focus-input");
+  if (focusInput) {
+    mainWindow.webContents.send("focus-input");
+  }
 }
 
-function registerHotkey() {
+function sendOpenSettings() {
+  if (mainWindow) {
+    mainWindow.webContents.send("open-settings");
+  }
+}
+
+function registerHotkey(accelerator) {
+  if (!accelerator) {
+    return false;
+  }
+  if (accelerator === currentHotkey) {
+    return true;
+  }
+  let ok = false;
   try {
-    const ok = globalShortcut.register(CONFIG.hotkey, showWindow);
-    if (!ok) {
-      console.warn(`Не удалось зарегистрировать горячую клавишу ${CONFIG.hotkey}`);
-    }
+    ok = globalShortcut.register(accelerator, () => showWindow());
   } catch (error) {
     console.warn("Ошибка горячей клавиши:", error.message);
+    ok = false;
   }
+  if (!ok) {
+    return false;
+  }
+  if (currentHotkey) {
+    try {
+      globalShortcut.unregister(currentHotkey);
+    } catch {
+      // Старое сочетание уже не зарегистрировано.
+    }
+  }
+  currentHotkey = accelerator;
+  return true;
+}
+
+function loginItemOptions(enabled) {
+  if (app.isPackaged) {
+    return {
+      openAtLogin: enabled,
+      path: process.execPath,
+      args: ["--hidden"],
+    };
+  }
+  const launcher = path.join(PROJECT_ROOT, "Омега.exe");
+  if (fs.existsSync(launcher)) {
+    return {
+      openAtLogin: enabled,
+      path: launcher,
+      args: ["--hidden"],
+    };
+  }
+  return {
+    openAtLogin: enabled,
+    path: process.execPath,
+    args: [app.getAppPath(), "--hidden"],
+  };
+}
+
+function applyAutostart(enabled) {
+  try {
+    const options = loginItemOptions(enabled);
+    app.setLoginItemSettings(options);
+    const actual = app.getLoginItemSettings({
+      path: options.path,
+      args: options.args,
+    });
+    return Boolean(actual.openAtLogin) === Boolean(enabled);
+  } catch (error) {
+    console.error("Не удалось изменить автозапуск:", error.message);
+    return false;
+  }
+}
+
+function broadcastSettings() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("settings-changed", SETTINGS);
+  }
+}
+
+function updateSettings(patch) {
+  const previous = SETTINGS;
+  const candidate = sanitizeSettings({ ...SETTINGS, ...patch }, previous);
+
+  if (
+    candidate.hotkey !== previous.hotkey &&
+    !registerHotkey(candidate.hotkey)
+  ) {
+    return {
+      ok: false,
+      error: `Сочетание ${candidate.hotkey} занято или не поддерживается. Оставил прежнее.`,
+    };
+  }
+
+  const autostartChanged = candidate.autostart !== previous.autostart;
+  if (autostartChanged && !applyAutostart(candidate.autostart)) {
+    if (candidate.hotkey !== previous.hotkey) {
+      registerHotkey(previous.hotkey);
+    }
+    return {
+      ok: false,
+      error: "Не удалось изменить автозапуск Windows.",
+    };
+  }
+
+  try {
+    SETTINGS = saveSettings(PROJECT_ROOT, candidate);
+  } catch (error) {
+    if (candidate.hotkey !== previous.hotkey) {
+      registerHotkey(previous.hotkey);
+    }
+    if (autostartChanged) {
+      applyAutostart(previous.autostart);
+    }
+    return { ok: false, error: `Не удалось сохранить настройки: ${error.message}` };
+  }
+
+  updateTrayMenu();
+  broadcastSettings();
+  return { ok: true, settings: SETTINGS };
+}
+
+function updateTrayMenu() {
+  if (!tray) {
+    return;
+  }
+  const menu = Menu.buildFromTemplate([
+    {
+      label: "Показать",
+      click: () => showWindow(),
+    },
+    {
+      label: "Настройки",
+      click: () => {
+        showWindow(false);
+        sendOpenSettings();
+      },
+    },
+    { type: "separator" },
+    {
+      label: "Автозапуск с Windows",
+      type: "checkbox",
+      checked: Boolean(SETTINGS.autostart),
+      click: (item) => {
+        const result = updateSettings({ autostart: item.checked });
+        if (!result.ok) {
+          item.checked = Boolean(SETTINGS.autostart);
+          dialog.showErrorBox("Автозапуск", result.error);
+          return;
+        }
+        if (mainWindow) {
+          mainWindow.webContents.send("settings-changed", SETTINGS);
+        }
+      },
+    },
+    { type: "separator" },
+    {
+      label: "Выход",
+      click: () => requestQuit(),
+    },
+  ]);
+  tray.setContextMenu(menu);
+}
+
+function createTray() {
+  const iconPath = path.join(__dirname, "assets", "tray-32.png");
+  let image = nativeImage.createFromPath(iconPath);
+  if (image.isEmpty()) {
+    image = nativeImage.createFromPath(
+      path.join(__dirname, "assets", "icon.ico"),
+    );
+  }
+  tray = new Tray(image);
+  tray.setToolTip("Омега (Ω)");
+  tray.on("click", () => showWindow());
+  tray.on("double-click", () => showWindow());
+  updateTrayMenu();
 }
 
 function isHttpUrl(value) {
@@ -286,20 +484,20 @@ function isHttpUrl(value) {
 }
 
 function registerIpc() {
-  ipcMain.handle("jarvis:session", (event) => {
+  ipcMain.handle("omega:session", (event) => {
     if (!mainWindow || event.sender !== mainWindow.webContents) {
       return null;
     }
     return { apiBase, token: TOKEN };
   });
 
-  ipcMain.handle("jarvis:hide", (event) => {
+  ipcMain.handle("omega:hide", (event) => {
     if (mainWindow && event.sender === mainWindow.webContents) {
       mainWindow.hide();
     }
   });
 
-  ipcMain.handle("jarvis:open-external", async (event, url) => {
+  ipcMain.handle("omega:open-external", async (event, url) => {
     if (!mainWindow || event.sender !== mainWindow.webContents) {
       return false;
     }
@@ -308,6 +506,35 @@ function registerIpc() {
     }
     await shell.openExternal(url);
     return true;
+  });
+
+  ipcMain.handle("omega:get-settings", (event) => {
+    if (!mainWindow || event.sender !== mainWindow.webContents) {
+      return null;
+    }
+    return SETTINGS;
+  });
+
+  ipcMain.handle("omega:save-settings", (event, patch) => {
+    if (!mainWindow || event.sender !== mainWindow.webContents) {
+      return { ok: false, error: "Нет доступа." };
+    }
+    if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
+      return { ok: false, error: "Неверные настройки." };
+    }
+    const allowed = {};
+    for (const key of [
+      "hotkey",
+      "autostart",
+      "budget_limit_rub",
+      "allowed_folders",
+      "allowed_apps",
+    ]) {
+      if (Object.prototype.hasOwnProperty.call(patch, key)) {
+        allowed[key] = patch[key];
+      }
+    }
+    return updateSettings(allowed);
   });
 }
 
@@ -367,6 +594,17 @@ async function shutdownServer() {
   return shutdownPromise;
 }
 
+function requestQuit() {
+  if (isQuitting) {
+    app.quit();
+    return;
+  }
+  isQuitting = true;
+  shutdownServer()
+    .catch(() => {})
+    .finally(() => app.quit());
+}
+
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
@@ -385,12 +623,21 @@ if (!gotLock) {
 
     registerIpc();
 
+    if (!applyAutostart(SETTINGS.autostart)) {
+      console.warn("Не удалось применить настройку автозапуска.");
+    }
+
     try {
       const port = await startServer();
       apiBase = `http://127.0.0.1:${port}`;
       await waitForServer();
       createWindow();
-      registerHotkey();
+      createTray();
+      if (!registerHotkey(SETTINGS.hotkey)) {
+        console.warn(
+          `Не удалось зарегистрировать горячую клавишу ${SETTINGS.hotkey}`,
+        );
+      }
     } catch (error) {
       dialog.showErrorBox(
         "Не удалось запустить помощника",
@@ -403,7 +650,7 @@ if (!gotLock) {
   });
 
   app.on("window-all-closed", () => {
-    app.quit();
+    // Приложение живёт в трее, пока пользователь не выберет «Выход».
   });
 
   app.on("before-quit", (event) => {
@@ -411,14 +658,15 @@ if (!gotLock) {
       return;
     }
     event.preventDefault();
-    isQuitting = true;
-    shutdownServer()
-      .catch(() => {})
-      .finally(() => app.quit());
+    requestQuit();
   });
 
   app.on("will-quit", () => {
     globalShortcut.unregisterAll();
+    if (tray) {
+      tray.destroy();
+      tray = null;
+    }
     killServerTree(serverProcess);
   });
 }

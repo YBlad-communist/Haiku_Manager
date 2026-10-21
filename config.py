@@ -9,6 +9,8 @@ from pathlib import Path
 PROJECT_DIR = Path(__file__).resolve().parent
 DATA_DIR = PROJECT_DIR / "data"
 LOGS_DIR = PROJECT_DIR / "logs"
+SETTINGS_FILE = DATA_DIR / "settings.json"
+PROMPT_FILE = PROJECT_DIR / "prompts" / "omega.md"
 
 ENV_FILE = PROJECT_DIR / ".env"
 
@@ -87,7 +89,7 @@ MAX_NEW_CONTACTS_PER_DAY = int(os.environ.get("MAX_NEW_CONTACTS_PER_DAY", "10"))
 MIN_PAUSE_SECONDS = int(os.environ.get("MIN_PAUSE_SECONDS", "30"))
 
 # Честный User-Agent: не изображаем браузер.
-USER_AGENT = "HaikuManager/0.1 (personal research assistant; contact: owner)"
+USER_AGENT = "Omega/0.2 (personal local assistant; contact: owner)"
 
 # Имена переменных, значения которых нельзя писать в журнал и на экран.
 SECRET_ENV_NAMES = (

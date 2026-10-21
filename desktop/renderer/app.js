@@ -1,4 +1,4 @@
-// Логика окна. Данные от агента всегда выводятся как текст, не как HTML.
+// Логика окна. Ответы модели проходят через безопасный Markdown без сырого HTML.
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -11,10 +11,15 @@ const state = {
   pending: null,
   editing: false,
   modalBusy: false,
+  settings: null,
+  settingsOpen: false,
+  recordingHotkey: false,
+  settingsBusy: false,
 };
 
 let currentCard = null;
 let lastFocus = null;
+let settingsLastFocus = null;
 let toastTimer = null;
 
 const els = {
@@ -42,6 +47,14 @@ const els = {
   approve: document.getElementById("approve"),
   voice: document.getElementById("voice"),
   toast: document.getElementById("toast"),
+  settingsBtn: document.getElementById("settingsBtn"),
+  settings: document.getElementById("settings"),
+  settingsClose: document.getElementById("settingsClose"),
+  settingsDone: document.getElementById("settingsDone"),
+  settingsError: document.getElementById("settingsError"),
+  hotkeyInput: document.getElementById("hotkeyInput"),
+  autostartToggle: document.getElementById("autostartToggle"),
+  budgetInput: document.getElementById("budgetInput"),
 };
 
 const TOOL_LABELS = {
@@ -52,6 +65,184 @@ const TOOL_LABELS = {
   draft_message: "Готовлю черновик",
   send_message: "Проверяю отправку",
 };
+
+const markdown = window.markdownit
+  ? window.markdownit({
+      html: false,
+      linkify: true,
+      breaks: true,
+      typographer: false,
+    })
+  : null;
+
+const CALLOUTS = {
+  важно: { className: "important", title: "Важно" },
+  внимание: { className: "warning", title: "Внимание" },
+  итог: { className: "summary", title: "Итог" },
+  совет: { className: "tip", title: "Совет" },
+};
+
+const MARKDOWN_TAGS = [
+  "p", "br", "strong", "em", "del", "code", "pre", "blockquote",
+  "ul", "ol", "li", "a", "h1", "h2", "h3", "h4", "h5", "h6",
+  "table", "thead", "tbody", "tr", "th", "td", "hr", "span",
+];
+
+if (window.DOMPurify) {
+  window.DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+    if (node.tagName !== "A") {
+      return;
+    }
+    const href = node.getAttribute("href") || "";
+    if (!/^https?:\/\//i.test(href)) {
+      node.removeAttribute("href");
+      return;
+    }
+    node.setAttribute("data-external", "1");
+    node.setAttribute("rel", "noreferrer noopener");
+  });
+}
+
+function removeCalloutMarker(paragraph, marker) {
+  let remaining = marker.length;
+  const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode();
+  while (node && remaining > 0) {
+    const length = node.nodeValue.length;
+    if (remaining >= length) {
+      remaining -= length;
+      node.nodeValue = "";
+    } else {
+      node.nodeValue = node.nodeValue.slice(remaining);
+      remaining = 0;
+    }
+    node = walker.nextNode();
+  }
+  while (
+    paragraph.firstChild &&
+    (paragraph.firstChild.nodeName === "BR" ||
+      (paragraph.firstChild.nodeType === Node.TEXT_NODE &&
+        !paragraph.firstChild.nodeValue))
+  ) {
+    paragraph.firstChild.remove();
+  }
+  if (!paragraph.textContent.trim() && !paragraph.querySelector("*")) {
+    paragraph.remove();
+  }
+}
+
+function promoteCallout(blockquote) {
+  const paragraph = blockquote.querySelector("p");
+  if (!paragraph) {
+    return;
+  }
+  const match = /^\s*\[!(важно|внимание|итог|совет)\]\s*/i.exec(paragraph.textContent);
+  if (!match) {
+    return;
+  }
+  const kind = CALLOUTS[match[1].toLowerCase()];
+  if (!kind) {
+    return;
+  }
+  removeCalloutMarker(paragraph, match[0]);
+  blockquote.classList.add("callout", `callout-${kind.className}`);
+  const title = document.createElement("p");
+  title.className = "callout-title";
+  title.textContent = kind.title;
+  blockquote.prepend(title);
+}
+
+function enhanceCodeBlocks(container) {
+  for (const pre of container.querySelectorAll("pre")) {
+    if (pre.parentElement && pre.parentElement.classList.contains("code-block")) {
+      continue;
+    }
+    const code = pre.querySelector("code");
+    const languageMatch = code && /(?:^|\s)language-([\w-]+)/.exec(code.className);
+    const language = languageMatch ? languageMatch[1] : "код";
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "code-block";
+    const head = document.createElement("div");
+    head.className = "code-head";
+    const label = document.createElement("span");
+    label.className = "code-lang";
+    label.textContent = language;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "ci code-copy";
+    button.textContent = "Копировать";
+    head.append(label, button);
+    pre.replaceWith(wrapper);
+    wrapper.append(head, pre);
+  }
+}
+
+function enhanceTables(container) {
+  for (const table of container.querySelectorAll("table")) {
+    if (table.parentElement && table.parentElement.classList.contains("table-wrap")) {
+      continue;
+    }
+    const wrapper = document.createElement("div");
+    wrapper.className = "table-wrap";
+    table.replaceWith(wrapper);
+    wrapper.append(table);
+  }
+}
+
+function renderMarkdown(container, text) {
+  const value = String(text || "");
+  container.replaceChildren();
+  if (!markdown || !window.DOMPurify) {
+    renderTextWithLinks(container, value);
+    return;
+  }
+  const clean = window.DOMPurify.sanitize(markdown.render(value), {
+    ALLOWED_TAGS: MARKDOWN_TAGS,
+    ALLOWED_ATTR: ["href", "title", "class", "data-external", "rel"],
+    ALLOWED_URI_REGEXP: /^https?:\/\//i,
+  });
+  container.innerHTML = clean;
+  for (const blockquote of container.querySelectorAll("blockquote")) {
+    promoteCallout(blockquote);
+  }
+  enhanceCodeBlocks(container);
+  enhanceTables(container);
+  for (const link of container.querySelectorAll("a")) {
+    if (!link.getAttribute("href")) {
+      continue;
+    }
+    link.dataset.external = "1";
+    link.rel = "noreferrer noopener";
+  }
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    area.className = "copy-helper";
+    document.body.append(area);
+    area.select();
+    let copied = false;
+    try {
+      copied = document.execCommand("copy");
+    } catch {
+      copied = false;
+    }
+    area.remove();
+    return copied;
+  }
+}
+
+function syncInert() {
+  els.app.inert = !els.modal.hidden || !els.settings.hidden || !els.voice.hidden;
+}
+
 
 function api(path) {
   return `${state.apiBase}${path}`;
@@ -350,8 +541,11 @@ function finishCard(event) {
     "error",
     reason !== "done" && reason !== "max_steps",
   );
-  currentCard.refs.answer.replaceChildren();
-  renderTextWithLinks(currentCard.refs.answer, answer);
+  if (reason === "done" || reason === "max_steps") {
+    renderMarkdown(currentCard.refs.answer, answer);
+  } else {
+    currentCard.refs.answer.textContent = answer;
+  }
 
   if (event.remaining_rub !== undefined && event.remaining_rub !== null) {
     els.budgetValue.textContent = formatRub(event.remaining_rub, 2);
@@ -531,7 +725,7 @@ function showHistory(item) {
   title.textContent = "Прошлая задача";
   const answer = document.createElement("div");
   answer.className = "answer";
-  renderTextWithLinks(answer, item.answer || "Ответ не сохранился.");
+  renderMarkdown(answer, item.answer || "Ответ не сохранился.");
   const foot = document.createElement("p");
   foot.className = "card-foot";
   foot.textContent =
@@ -578,13 +772,13 @@ function openConfirm(event) {
 
   lastFocus = document.activeElement;
   els.modal.hidden = false;
-  els.app.inert = true;
+  syncInert();
   els.reject.focus();
 }
 
 function closeConfirm() {
   els.modal.hidden = true;
-  els.app.inert = false;
+  syncInert();
   state.pending = null;
   state.editing = false;
   state.modalBusy = false;
@@ -651,12 +845,27 @@ function enterEditMode() {
 }
 
 function trapFocus(event) {
-  if (els.modal.hidden || event.key !== "Tab") {
+  if (event.key !== "Tab") {
+    return;
+  }
+  const scope = !els.modal.hidden
+    ? els.modal
+    : !els.settings.hidden
+      ? els.settings
+      : null;
+  if (!scope) {
     return;
   }
   const focusable = Array.from(
-    els.modal.querySelectorAll("button, textarea"),
-  ).filter((node) => !node.hidden && !node.disabled && node.offsetParent !== null);
+    scope.querySelectorAll(
+      "button, textarea, input, [tabindex]:not([tabindex='-1'])",
+    ),
+  ).filter(
+    (node) =>
+      !node.hidden &&
+      !node.disabled &&
+      node.offsetParent !== null,
+  );
   if (!focusable.length) {
     return;
   }
@@ -673,14 +882,282 @@ function trapFocus(event) {
 
 function openVoice() {
   els.voice.hidden = false;
-  els.app.inert = true;
+  syncInert();
   els.voice.focus();
 }
 
 function closeVoice() {
   els.voice.hidden = true;
-  els.app.inert = false;
+  syncInert();
   els.input.focus();
+}
+
+const HOTKEY_LABELS = {
+  CommandOrControl: "Ctrl",
+  Control: "Ctrl",
+  Command: "Cmd",
+  Super: "Win",
+  Alt: "Alt",
+  Option: "Alt",
+  Shift: "Shift",
+  Space: "Пробел",
+  Up: "↑",
+  Down: "↓",
+  Left: "←",
+  Right: "→",
+  PageUp: "PageUp",
+  PageDown: "PageDown",
+};
+
+function formatHotkey(value) {
+  return String(value || "")
+    .split("+")
+    .filter(Boolean)
+    .map((part) => HOTKEY_LABELS[part] || part)
+    .join(" + ");
+}
+
+function keyFromEvent(event) {
+  const key = event.key;
+  if (["Control", "Shift", "Alt", "Meta", "OS"].includes(key)) {
+    return "";
+  }
+  if (key === " ") {
+    return "Space";
+  }
+  if (key.startsWith("Arrow")) {
+    return key.slice(5);
+  }
+  const named = {
+    Enter: "Enter",
+    Tab: "Tab",
+    Backspace: "Backspace",
+    Delete: "Delete",
+    Home: "Home",
+    End: "End",
+    PageUp: "PageUp",
+    PageDown: "PageDown",
+    Insert: "Insert",
+  };
+  if (named[key]) {
+    return named[key];
+  }
+  if (/^F([1-9]|1\d|2[0-4])$/i.test(key)) {
+    return key.toUpperCase();
+  }
+  if (/^Key[A-Z]$/.test(event.code)) {
+    return event.code.slice(3);
+  }
+  if (/^Digit[0-9]$/.test(event.code)) {
+    return event.code.slice(5);
+  }
+  if (/^[a-z0-9]$/i.test(key)) {
+    return key.toUpperCase();
+  }
+  return "";
+}
+
+function acceleratorFromEvent(event) {
+  const key = keyFromEvent(event);
+  if (!key) {
+    return null;
+  }
+  const parts = [];
+  if (event.ctrlKey) {
+    parts.push("CommandOrControl");
+  }
+  if (event.altKey) {
+    parts.push("Alt");
+  }
+  if (event.shiftKey) {
+    parts.push("Shift");
+  }
+  if (event.metaKey) {
+    parts.push("Super");
+  }
+  const functionKey = /^F([1-9]|1\d|2[0-4])$/.test(key);
+  if (!event.ctrlKey && !event.altKey && !event.metaKey && !functionKey) {
+    return { error: "Добавь Ctrl, Alt или Win к клавише." };
+  }
+  if (!parts.length) {
+    return { error: "Не удалось распознать сочетание." };
+  }
+  return { accelerator: [...parts, key].join("+") };
+}
+
+function showSettingsError(message) {
+  els.settingsError.textContent = message;
+  els.settingsError.hidden = false;
+}
+
+function clearSettingsError() {
+  els.settingsError.textContent = "";
+  els.settingsError.hidden = true;
+}
+
+function applySettingsToUi() {
+  if (!state.settings) {
+    return;
+  }
+  if (!state.recordingHotkey) {
+    els.hotkeyInput.value = formatHotkey(state.settings.hotkey);
+  }
+  const autostart = Boolean(state.settings.autostart);
+  els.autostartToggle.setAttribute("aria-checked", String(autostart));
+  els.autostartToggle.classList.toggle("on", autostart);
+  if (document.activeElement !== els.budgetInput) {
+    els.budgetInput.value = String(state.settings.budget_limit_rub);
+  }
+}
+
+async function saveSettingsPatch(patch) {
+  clearSettingsError();
+  try {
+    const result = await window.omega.saveSettings(patch);
+    if (!result || !result.ok) {
+      throw new Error((result && result.error) || "Не удалось сохранить настройки.");
+    }
+    state.settings = result.settings;
+    applySettingsToUi();
+    return true;
+  } catch (error) {
+    showSettingsError(error.message || String(error));
+    if (!state.settingsOpen) {
+      showToast(error.message || String(error));
+    }
+    return false;
+  }
+}
+
+async function openSettings() {
+  if (state.settingsOpen) {
+    els.settingsClose.focus();
+    return;
+  }
+  if (!els.modal.hidden) {
+    showToast("Сначала ответь на подтверждение.");
+    return;
+  }
+  if (!els.voice.hidden) {
+    closeVoice();
+  }
+  try {
+    const settings = await window.omega.getSettings();
+    if (!settings) {
+      throw new Error("Приложение не передало настройки.");
+    }
+    state.settings = settings;
+  } catch (error) {
+    showToast(error.message || "Не удалось открыть настройки.");
+    return;
+  }
+  settingsLastFocus = document.activeElement;
+  state.settingsOpen = true;
+  applySettingsToUi();
+  clearSettingsError();
+  els.settings.hidden = false;
+  syncInert();
+  els.settingsClose.focus();
+}
+
+function closeSettings() {
+  if (!state.settingsOpen) {
+    return;
+  }
+  stopHotkeyCapture(true);
+  els.settings.hidden = true;
+  state.settingsOpen = false;
+  syncInert();
+  if (settingsLastFocus && typeof settingsLastFocus.focus === "function") {
+    settingsLastFocus.focus();
+  } else {
+    els.input.focus();
+  }
+  settingsLastFocus = null;
+}
+
+function startHotkeyCapture() {
+  if (!state.settingsOpen || state.recordingHotkey) {
+    return;
+  }
+  state.recordingHotkey = true;
+  els.hotkeyInput.classList.add("recording");
+  els.hotkeyInput.value = "Нажми сочетание…";
+  clearSettingsError();
+}
+
+function stopHotkeyCapture(restore = true) {
+  if (!state.recordingHotkey) {
+    return;
+  }
+  state.recordingHotkey = false;
+  els.hotkeyInput.classList.remove("recording");
+  if (restore) {
+    applySettingsToUi();
+  }
+}
+
+async function saveHotkey(accelerator) {
+  state.recordingHotkey = false;
+  els.hotkeyInput.classList.remove("recording");
+  const ok = await saveSettingsPatch({ hotkey: accelerator });
+  if (ok) {
+    showToast(`Горячая клавиша: ${formatHotkey(accelerator)}`);
+    els.hotkeyInput.blur();
+  } else {
+    applySettingsToUi();
+  }
+}
+
+async function toggleAutostart() {
+  if (!state.settings || state.settingsBusy) {
+    return;
+  }
+  state.settingsBusy = true;
+  els.autostartToggle.disabled = true;
+  const desired = !state.settings.autostart;
+  const ok = await saveSettingsPatch({ autostart: desired });
+  els.autostartToggle.disabled = false;
+  state.settingsBusy = false;
+  if (ok) {
+    showToast(desired ? "Автозапуск включён." : "Автозапуск выключен.");
+  } else {
+    applySettingsToUi();
+  }
+}
+
+async function saveBudget() {
+  if (!state.settings || state.settingsBusy) {
+    return;
+  }
+  const value = Number(String(els.budgetInput.value).replace(",", "."));
+  if (!Number.isFinite(value) || value < 0 || value > 1000000) {
+    showSettingsError("Бюджет должен быть числом от 0 до 1 000 000 ₽.");
+    applySettingsToUi();
+    return;
+  }
+  if (Math.abs(value - Number(state.settings.budget_limit_rub)) < 0.001) {
+    return;
+  }
+  state.settingsBusy = true;
+  const ok = await saveSettingsPatch({ budget_limit_rub: value });
+  state.settingsBusy = false;
+  if (ok) {
+    showToast("Лимит бюджета сохранён.");
+    refreshSummary();
+  } else {
+    applySettingsToUi();
+  }
+}
+
+function handleSettingsChanged(settings) {
+  if (!settings) {
+    return;
+  }
+  state.settings = settings;
+  if (!state.recordingHotkey) {
+    applySettingsToUi();
+  }
 }
 
 function bindEvents() {
@@ -720,6 +1197,53 @@ function bindEvents() {
     answerConfirm(state.editing ? "edit" : "approve"),
   );
 
+  els.settingsBtn.addEventListener("click", openSettings);
+  els.settingsClose.addEventListener("click", closeSettings);
+  els.settingsDone.addEventListener("click", closeSettings);
+  els.settings.addEventListener("click", (event) => {
+    if (event.target === els.settings) {
+      closeSettings();
+    }
+  });
+
+  els.hotkeyInput.addEventListener("click", startHotkeyCapture);
+  els.hotkeyInput.addEventListener("blur", () => stopHotkeyCapture(true));
+  els.hotkeyInput.addEventListener("keydown", async (event) => {
+    if (!state.recordingHotkey) {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        startHotkeyCapture();
+      }
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.key === "Escape") {
+      stopHotkeyCapture(true);
+      els.hotkeyInput.blur();
+      return;
+    }
+    const result = acceleratorFromEvent(event);
+    if (!result) {
+      return;
+    }
+    if (result.error) {
+      showSettingsError(result.error);
+      return;
+    }
+    await saveHotkey(result.accelerator);
+  });
+
+  els.autostartToggle.addEventListener("click", toggleAutostart);
+
+  els.budgetInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      els.budgetInput.blur();
+    }
+  });
+  els.budgetInput.addEventListener("blur", saveBudget);
+
   document.addEventListener("keydown", (event) => {
     if (event.key === "Tab") {
       trapFocus(event);
@@ -735,39 +1259,74 @@ function bindEvents() {
       }
       return;
     }
+    if (state.settingsOpen) {
+      event.preventDefault();
+      if (state.recordingHotkey) {
+        stopHotkeyCapture(true);
+        els.hotkeyInput.blur();
+      } else {
+        closeSettings();
+      }
+      return;
+    }
     if (!els.voice.hidden) {
       event.preventDefault();
       closeVoice();
       return;
     }
-    window.jarvis.hide();
+    window.omega.hide();
   });
 
-  document.addEventListener("click", (event) => {
+  document.addEventListener("click", async (event) => {
+    const copyButton = event.target.closest(".code-copy");
+    if (copyButton) {
+      const wrapper = copyButton.closest(".code-block");
+      const code = wrapper && wrapper.querySelector("code");
+      if (code) {
+        const copied = await copyText(code.textContent);
+        copyButton.textContent = copied ? "Скопировано" : "Не вышло";
+        window.setTimeout(() => {
+          copyButton.textContent = "Копировать";
+        }, 1600);
+      }
+      return;
+    }
     const link = event.target.closest("a[data-external]");
     if (link) {
       event.preventDefault();
-      window.jarvis.openExternal(link.href);
+      window.omega.openExternal(link.href);
     }
   });
 
-  window.jarvis.onFocusInput(() => {
-    if (!els.modal.hidden || !els.voice.hidden) {
+  window.omega.onFocusInput(() => {
+    if (!els.modal.hidden || state.settingsOpen || !els.voice.hidden) {
       return;
     }
     els.input.focus();
   });
+
+  window.omega.onOpenSettings(openSettings);
+  window.omega.onSettingsChanged(handleSettingsChanged);
 }
 
 async function init() {
   bindEvents();
   try {
-    const session = await window.jarvis.session();
+    const session = await window.omega.session();
     if (!session || !session.apiBase || !session.token) {
       throw new Error("Приложение не передало параметры соединения.");
     }
     state.apiBase = session.apiBase;
     state.token = session.token;
+    try {
+      const settings = await window.omega.getSettings();
+      if (settings) {
+        state.settings = settings;
+        applySettingsToUi();
+      }
+    } catch {
+      state.settings = null;
+    }
     await refreshSummary();
     els.input.focus();
   } catch (error) {

@@ -18,9 +18,9 @@ internal static class Launcher
         {
             MessageBox.Show(
                 "Не найден Electron.\n\n" +
-                "Положи лаунчер в папку проекта Haiku_Manager и выполни:\n" +
+                "Положи лаунчер в папку проекта и выполни:\n" +
                 "npm install",
-                "Джарвис",
+                "Омега (Ω)",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
             return 1;
@@ -48,7 +48,7 @@ internal static class Launcher
         {
             MessageBox.Show(
                 "Не удалось запустить приложение.\n\n" + error.Message,
-                "Джарвис",
+                "Омега (Ω)",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
             return 1;
