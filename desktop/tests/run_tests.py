@@ -54,6 +54,9 @@ class Server:
             "OMEGA_TRASH_FILE": str(self.trash_file),
             "OMEGA_MEMORY_FILE": str(self.memory_file),
             "OMEGA_REMINDERS_FILE": str(self.reminders_file),
+            "OMEGA_ATTACHMENTS_DIR": str(
+                Path(tempfile.gettempdir()) / f"omega_attach_{os.getpid()}"
+            ),
             "BUDGET_LIMIT_RUB": "500",
             "PYTHONIOENCODING": "utf-8",
             "PYTHONUTF8": "1",
@@ -392,6 +395,56 @@ def test_computer_tools() -> None:
             computer._start = old_start
 
 
+def test_history_attachment_note() -> None:
+    """В истории вложение — это пометка, а не содержимое."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("omega_app_module", APP)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    image_message = {
+        "role": "user",
+        "text": "Что на картинке?",
+        "attachments": [
+            {
+                "id": "abc123",
+                "name": "плакат.png",
+                "kind": "image",
+                "file": "abc123.png",
+                "text": "",
+            }
+        ],
+    }
+    note = module._history_text(image_message)
+    check(
+        "в истории картинка — пометка",
+        "[изображение: плакат.png]" in note,
+        note,
+    )
+
+    text_message = {
+        "role": "user",
+        "text": "Посмотри файл",
+        "attachments": [
+            {
+                "id": "def456",
+                "name": "заметка.txt",
+                "kind": "text",
+                "file": "def456.txt",
+                "text": "СЕКРЕТНЫЙ ТЕКСТ ФАЙЛА",
+            }
+        ],
+    }
+    note = module._history_text(text_message)
+    check("в истории файл — пометка", "[файл: заметка.txt]" in note, note)
+    check(
+        "содержимое файла в историю не попадает",
+        "СЕКРЕТНЫЙ ТЕКСТ" not in note,
+        note,
+    )
+
+
 def test_settings_js() -> None:
     """Настройки окна: миграция старых списков и новые ключи запуска."""
     script = """
@@ -453,6 +506,7 @@ def main() -> int:
     check("диалог send_message: правка и отказ", ok, "" if ok else detail)
     test_computer_tools()
     test_settings_js()
+    test_history_attachment_note()
     server = Server()
     try:
         status, _, _ = server.request("GET", "/api/health")
@@ -691,6 +745,55 @@ def main() -> int:
             status == 200 and left == [],
             f"status={status}, left={left}",
         )
+
+        # --- Вложения ---
+        import base64
+
+        payload = base64.b64encode("Привет из вложения".encode("utf-8")).decode("ascii")
+        status, _, body = server.request(
+            "POST",
+            "/api/attachments/upload",
+            token=TOKEN,
+            origin=server.origin,
+            body={"chat_id": "testchat", "name": "заметка.txt", "data": payload},
+        )
+        attachment = json.loads(body.decode("utf-8")).get("attachment") or {}
+        check(
+            "текстовое вложение принимается",
+            status == 200 and attachment.get("kind") == "text",
+            f"status={status}, body={attachment}",
+        )
+        check(
+            "в содержимом вложения нет base64",
+            "Привет" in str(attachment.get("text"))
+            and "base64" not in str(attachment.get("text")),
+            str(attachment.get("text"))[:80],
+        )
+
+        status, _, body = server.request(
+            "POST",
+            "/api/attachments/upload",
+            token=TOKEN,
+            origin=server.origin,
+            body={"chat_id": "testchat", "name": "virus.exe", "data": payload},
+        )
+        check("исполняемый файл отклоняется", status == 400, str(status))
+
+        status, _, body = server.request(
+            "POST",
+            "/api/attachments/upload",
+            token=TOKEN,
+            origin=server.origin,
+            body={"chat_id": "testchat", "name": "arch.zip", "data": payload},
+        )
+        check("архив отклоняется", status == 400, str(status))
+
+        status, _, body = server.request(
+            "GET",
+            "/api/attachments/file?chat_id=testchat&name=../config.py",
+            token=TOKEN,
+        )
+        check("выход за папку вложений закрыт", status == 404, str(status))
 
         status, _, _ = server.request("POST", "/api/task", token=TOKEN, body={"task": "x"})
         check("POST без Origin — 403", status == 403, str(status))

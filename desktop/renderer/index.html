@@ -35,7 +35,14 @@
     <main class="main">
       <section class="feed" id="feed" aria-live="polite" aria-label="Лента сообщений"></section>
       <form class="composer cl" id="composer">
+        <div class="attach-bar" id="attachBar" aria-label="Вложения"></div>
         <textarea class="ci input" id="input" rows="1" placeholder="Напиши или нажми на микрофон…" aria-label="Задача помощнику"></textarea>
+        <input type="file" id="attachInput" multiple hidden aria-hidden="true" tabindex="-1">
+        <button type="button" class="ci icon-btn" id="attachBtn" aria-label="Прикрепить файл или картинку" title="Прикрепить файл или картинку">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 11.5 12.5 20a5 5 0 0 1-7-7l8-8a3.5 3.5 0 0 1 5 5l-8 8a2 2 0 0 1-3-3l7.5-7.5"></path>
+          </svg>
+        </button>
         <button type="button" class="ci icon-btn mic-btn" id="mic" aria-label="Голосовой ввод">
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"></path>
@@ -160,6 +167,14 @@
           </div>
           <ul class="memory-list ci" id="reminderList"></ul>
           <p class="fineprint" id="reminderEmpty">Напоминаний пока нет.</p>
+        </section>
+
+        <section class="setting">
+          <div class="setting-text">
+            <h3>Чаты и вложения</h3>
+            <p>Удаление чата стирает и его вложения с диска.</p>
+          </div>
+          <button type="button" class="ci btn danger" id="deleteAllChats">Удалить все чаты</button>
         </section>
 
         <section class="setting">
@@ -315,6 +330,17 @@
   </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <div class="overlay" id="preview" role="dialog" aria-modal="true" aria-labelledby="previewTitle" hidden>
+    <div class="modal cl">
+      <h2 id="previewTitle">Превью</h2>
+      <img class="preview-image" id="previewImage" alt="Превью вложения">
+      <p class="modal-sub" id="previewMeta"></p>
+      <div class="modal-actions">
+        <button type="button" class="ci btn" id="previewClose">Закрыть</button>
+      </div>
+    </div>
+  </div>
 
   <button type="button" class="ci btn speak-stop" id="speakStop" hidden>Остановить озвучку</button>
 

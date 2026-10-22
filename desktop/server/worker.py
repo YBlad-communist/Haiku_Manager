@@ -262,9 +262,20 @@ def ui_chat(self, *args, **kwargs):
 llm.LLM.chat = ui_chat
 
 
-def run_task(task: str, history: list[dict] | None = None) -> None:
+def run_task(
+    task: str,
+    history: list[dict] | None = None,
+    attachments: list[dict] | None = None,
+    chat_id: str = "",
+) -> None:
     try:
-        result = agent.run(task, verbose=False, history=history)
+        result = agent.run(
+            task,
+            verbose=False,
+            history=history,
+            attachments=attachments,
+            chat_id=chat_id,
+        )
         emit({"type": "final", **result})
     except Exception as exc:  # noqa: BLE001
         safety.log_event("ui_worker_error", error=safety.redact(str(exc))[:500])
@@ -362,6 +373,8 @@ def main() -> int:
             run_task(
                 str(command.get("task") or ""),
                 history if isinstance(history, list) else None,
+                command.get("attachments") if isinstance(command.get("attachments"), list) else None,
+                str(command.get("chat_id") or ""),
             )
             return 0
 

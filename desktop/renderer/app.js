@@ -21,6 +21,8 @@ const state = {
   memory: [],
   memoryEnabled: true,
   reminders: [],
+  attachments: [],
+  dragging: false,
   editingMemoryId: null,
   voiceToken: 0,
   voiceRecording: false,
@@ -52,6 +54,15 @@ const els = {
   composer: document.getElementById("composer"),
   send: document.getElementById("send"),
   mic: document.getElementById("mic"),
+  attachBtn: document.getElementById("attachBtn"),
+  attachInput: document.getElementById("attachInput"),
+  attachBar: document.getElementById("attachBar"),
+  deleteAllChats: document.getElementById("deleteAllChats"),
+  preview: document.getElementById("preview"),
+  previewImage: document.getElementById("previewImage"),
+  previewMeta: document.getElementById("previewMeta"),
+  previewClose: document.getElementById("previewClose"),
+  previewTitle: document.getElementById("previewTitle"),
   clipboardBtn: document.getElementById("clipboardBtn"),
   speakStop: document.getElementById("speakStop"),
   newTask: document.getElementById("newTask"),
@@ -319,6 +330,74 @@ async function copyText(text) {
   }
 }
 
+async function ocrAttachments() {
+  const images = (state.attachments || []).filter((item) => item.kind === "image");
+  if (!images.length) {
+    showToast("Картинок для распознавания нет.");
+    return;
+  }
+  for (const item of images) {
+    try {
+      const data = await apiJson("/api/attachments/ocr", {
+        method: "POST",
+        body: JSON.stringify({ chat_id: state.chatId || "pending", id: item.id }),
+      });
+      item.text = data.text || "";
+      item.kind = "text";
+      item.tokens = Number(data.tokens || 0);
+    } catch (error) {
+      showToast(error.message || "Не удалось распознать текст.");
+      return;
+    }
+  }
+  renderAttachments();
+  showToast("Текст распознан локально — отправлю его как текст.");
+}
+
+function currentModelSeesImages() {
+  const model = state.settings?.model || "";
+  const caps = (state.promptInfo?.models || []).find((item) => item.id === model);
+  if (!caps) {
+    return true;
+  }
+  return caps.vision !== false;
+}
+
+async function handleAttachClick() {
+  if (currentModelSeesImages()) {
+    els.attachInput.click();
+    return;
+  }
+  const label = state.promptInfo?.models?.find(
+    (item) => item.id === (state.settings?.model || ""),
+  )?.label;
+  openConfirm({
+    kind: "no_vision",
+    local: true,
+    title: "Модель не видит картинки",
+    text: `Выбрана модель ${label || "без картинок"}. Она не понимает изображения.\nМожно сменить модель в настройках или распознать текст в картинке локально и отправить его текстом.`,
+    always_path: "",
+  });
+}
+
+function showDropHint(visible) {
+  let hint = document.getElementById("dropHint");
+  if (visible) {
+    if (!hint) {
+      hint = document.createElement("div");
+      hint.id = "dropHint";
+      hint.className = "drop-hint";
+      hint.textContent = "Отпусти файл — прикреплю";
+      document.body.append(hint);
+    }
+    hint.hidden = false;
+    return;
+  }
+  if (hint) {
+    hint.remove();
+  }
+}
+
 function syncInert() {
   els.app.inert = !els.modal.hidden || !els.settings.hidden || !els.voice.hidden;
 }
@@ -440,11 +519,46 @@ function scrollFeed() {
   els.feed.scrollTop = els.feed.scrollHeight;
 }
 
-function addUserMessage(text) {
+function addUserMessage(text, attachments = []) {
   const node = document.createElement("div");
   node.className = "user-msg";
   node.textContent = text;
   els.feed.append(node);
+  if (attachments && attachments.length) {
+    const bar = document.createElement("div");
+    bar.className = "attach-bar sent";
+    for (const item of attachments) {
+      const chip = document.createElement("div");
+      chip.className = "attach-chip";
+      if (item.kind === "image" && item.thumb) {
+        const thumb = document.createElement("img");
+        thumb.className = "attach-thumb";
+        thumb.alt = item.name || "Картинка";
+        thumb.src = api(
+          `/api/attachments/file?chat_id=${encodeURIComponent(state.chatId || "pending")}&name=${encodeURIComponent(item.thumb)}`,
+        );
+        thumb.addEventListener("click", () => openPreview(item));
+        chip.append(thumb);
+      } else {
+        const icon = document.createElement("span");
+        icon.className = "attach-icon";
+        icon.textContent = (item.name || "?").split(".").pop().slice(0, 4) || "?";
+        chip.append(icon);
+      }
+      const info = document.createElement("span");
+      info.className = "attach-info";
+      const name = document.createElement("span");
+      name.className = "attach-name";
+      name.textContent = item.name || "файл";
+      const meta = document.createElement("span");
+      meta.className = "attach-meta";
+      meta.textContent = formatSize(item.size);
+      info.append(name, meta);
+      chip.append(info);
+      bar.append(chip);
+    }
+    els.feed.append(bar);
+  }
   scrollFeed();
 }
 
@@ -732,11 +846,11 @@ function setRunning(running) {
   els.newTask.disabled = false;
 }
 
-async function streamTask(task) {
+async function streamTask(task, attachments = []) {
   const response = await fetch(api("/api/task"), {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ task, chat_id: state.chatId }),
+    body: JSON.stringify({ task, chat_id: state.chatId, attachments }),
   });
 
   if (!response.ok) {
@@ -799,6 +913,161 @@ function parseBlock(block) {
 
 const MEMORY_COMMAND_RE = /^\s*запомни[,:\s]+(.+)$/i;
 const CLIPBOARD_COMMAND_RE = /^\s*(?:возьми|вставь|взять)\s+из\s+буфера\s*!?\s*$/i;
+const MAX_ATTACHMENTS = 5;
+
+function formatSize(bytes) {
+  const value = Number(bytes || 0);
+  if (value < 1024) return `${value} Б`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} КБ`;
+  return `${(value / 1048576).toFixed(1)} МБ`;
+}
+
+function renderAttachments() {
+  els.attachBar.replaceChildren();
+  const items = state.attachments || [];
+  for (const item of items) {
+    const chip = document.createElement("div");
+    chip.className = "attach-chip";
+    if (item.kind === "image" && item.thumb) {
+      const thumb = document.createElement("img");
+      thumb.className = "attach-thumb";
+      thumb.alt = item.name || "Картинка";
+      thumb.src = api(
+        `/api/attachments/file?chat_id=${encodeURIComponent(state.chatId || "pending")}&name=${encodeURIComponent(item.thumb)}`,
+      );
+      thumb.addEventListener("click", () => openPreview(item));
+      chip.append(thumb);
+    } else {
+      const icon = document.createElement("span");
+      icon.className = "attach-icon";
+      icon.textContent = (item.name || "?").split(".").pop().slice(0, 4) || "?";
+      chip.append(icon);
+    }
+    const info = document.createElement("span");
+    info.className = "attach-info";
+    const name = document.createElement("span");
+    name.className = "attach-name";
+    name.textContent = item.name || "файл";
+    name.title = item.name || "";
+    const meta = document.createElement("span");
+    meta.className = "attach-meta";
+    const bits = [formatSize(item.size)];
+    if (item.tokens) {
+      bits.push(`~${item.tokens} токенов`);
+    }
+    if (item.truncated) {
+      bits.push("обрезан");
+    }
+    meta.textContent = bits.join(" · ");
+    info.append(name, meta);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "attach-remove";
+    remove.textContent = "×";
+    remove.setAttribute("aria-label", `Убрать ${item.name || "вложение"}`);
+    remove.addEventListener("click", () => removeAttachment(item.id));
+    chip.append(info, remove);
+    els.attachBar.append(chip);
+  }
+}
+
+function openPreview(item) {
+  if (item.kind !== "image") {
+    showToast(`Превью есть только у картинок. ${item.name || ""}`);
+    return;
+  }
+  els.previewTitle.textContent = item.name || "Картинка";
+  els.previewImage.src = api(
+    `/api/attachments/file?chat_id=${encodeURIComponent(state.chatId || "pending")}&name=${encodeURIComponent(item.file || item.thumb || "")}`,
+  );
+  const bits = [formatSize(item.size)];
+  if (item.width) {
+    bits.push(`${item.width}×${item.height}`);
+  }
+  if (item.tokens) {
+    bits.push(`~${item.tokens} токенов`);
+  }
+  els.previewMeta.textContent = bits.join(" · ");
+  els.preview.hidden = false;
+  syncInert();
+  els.previewClose.focus();
+}
+
+function closePreview() {
+  els.preview.hidden = true;
+  els.previewImage.removeAttribute("src");
+  syncInert();
+}
+
+function removeAttachment(id) {
+  state.attachments = state.attachments.filter((item) => item.id !== id);
+  renderAttachments();
+}
+
+async function uploadAttachment(name, dataBase64) {
+  const response = await apiJson("/api/attachments/upload", {
+    method: "POST",
+    body: JSON.stringify({
+      chat_id: state.chatId || "pending",
+      name,
+      data: dataBase64,
+    }),
+  });
+  return response.attachment;
+}
+
+async function addFiles(files) {
+  const list = Array.from(files || []);
+  if (!list.length) {
+    return;
+  }
+  const room = MAX_ATTACHMENTS - (state.attachments || []).length;
+  if (room <= 0) {
+    showToast(`Больше ${MAX_ATTACHMENTS} вложений в одно сообщение нельзя.`);
+    return;
+  }
+  for (const file of list.slice(0, room)) {
+    try {
+      const base64 = await fileToBase64(file);
+      const meta = await uploadAttachment(file.name || "файл", base64);
+      state.attachments.push(meta);
+      renderAttachments();
+    } catch (error) {
+      showToast(error.message || `Не удалось прикрепить ${file.name || "файл"}.`);
+    }
+  }
+  if (list.length > room) {
+    showToast(`Прикреплено ${room} из ${list.length}: лимит ${MAX_ATTACHMENTS}.`);
+  }
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Не удалось прочитать файл."));
+    reader.onload = () => {
+      const result = String(reader.result || "");
+      resolve(result.includes(",") ? result.split(",").pop() : result);
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function attachFromPaste(event) {
+  const items = event.clipboardData?.items || [];
+  for (const item of items) {
+    if (item.type && item.type.startsWith("image/")) {
+      const file = item.getAsFile();
+      if (file) {
+        event.preventDefault();
+        await addFiles([file]);
+        showToast("Картинка из буфера прикреплена.");
+        return;
+      }
+    }
+  }
+}
+
 
 // Текст для озвучки: без кода, таблиц и врезок, длинное — по главному.
 function speechText(markdown) {
@@ -978,13 +1247,16 @@ async function submitTask() {
   state.running = true;
   state.cost = 0;
   setRunning(true);
-  addUserMessage(task);
+  const pendingAttachments = (state.attachments || []).slice();
+  addUserMessage(task, pendingAttachments);
   els.input.value = "";
+  state.attachments = [];
+  renderAttachments();
   currentCard = createAssistantCard();
   updateFooter(0, 0);
 
   try {
-    await streamTask(task);
+    await streamTask(task, pendingAttachments);
   } catch (error) {
     failCard(currentCard, error.message || "Не удалось выполнить задачу.");
   } finally {
@@ -1227,6 +1499,7 @@ function openConfirm(event) {
 
   const isSend = event.kind === "send_message";
   const isMemory = event.kind === "memory_propose";
+  const isNoVision = event.kind === "no_vision";
   els.modalTitle.textContent = event.title || "Подтвердить действие?";
   els.modalSubtitle.textContent = confirmSubtitle(event);
   els.draftText.textContent = String(event.text || "");
@@ -1236,13 +1509,16 @@ function openConfirm(event) {
   els.modalChips.hidden = !isSend;
   els.chipChannel.textContent = `Канал: ${event.channel || "—"}`;
   els.chipToday.textContent = `Сегодня: ${event.today || 0} из ${event.limit || 0}`;
-  els.edit.hidden = !isSend && !isMemory;
+  els.edit.hidden = !isSend && !isMemory && !isNoVision;
+  els.edit.textContent = isNoVision ? "Распознать текст (OCR)" : "Изменить";
   els.approve.textContent = isSend
     ? "Отправить"
     : isMemory
       ? "Запомнить"
-      : "Подтвердить";
-  els.reject.textContent = isMemory ? "Не надо" : "Отклонить";
+      : isNoVision
+        ? "Сменить модель"
+        : "Подтвердить";
+  els.reject.textContent = isMemory ? "Не надо" : isNoVision ? "Закрыть" : "Отклонить";
   const canAlways = event.kind === "launch_app" && Boolean(event.always_path);
   els.alwaysRow.hidden = !canAlways;
   els.alwaysCheck.checked = false;
@@ -1315,6 +1591,15 @@ async function answerConfirm(action) {
   setModalBusy(true);
   els.modalError.hidden = true;
   try {
+    if (event.kind === "no_vision") {
+      closeConfirm();
+      if (action === "edit") {
+        await ocrAttachments();
+      } else if (action === "approve") {
+        openSettings();
+      }
+      return;
+    }
     if (isMemory && event.local) {
       if (action !== "approve" && action !== "edit") {
         closeConfirm();
@@ -1372,11 +1657,13 @@ function trapFocus(event) {
   }
   const scope = !els.modal.hidden
     ? els.modal
-    : !els.settings.hidden
-      ? els.settings
-      : !els.voice.hidden
-        ? els.voice
-        : null;
+    : !els.preview.hidden
+      ? els.preview
+      : !els.settings.hidden
+        ? els.settings
+        : !els.voice.hidden
+          ? els.voice
+          : null;
   if (!scope) {
     return;
   }
@@ -2087,6 +2374,23 @@ async function removeAllowedApp(path) {
   }
 }
 
+async function deleteAllChats() {
+  if (!window.confirm("Удалить все чаты и вложения? Восстановить нельзя.")) {
+    return;
+  }
+  try {
+    await apiJson("/api/chats", { method: "DELETE" });
+    state.chatId = "";
+    state.chats = [];
+    els.feed.replaceChildren();
+    await loadChats();
+    await refreshSummary();
+    showToast("Чаты и вложения удалены.");
+  } catch (error) {
+    showToast(error.message || "Не удалось удалить чаты.");
+  }
+}
+
 function renderMemory() {
   const entries = Array.isArray(state.memory) ? state.memory : [];
   els.memoryList.replaceChildren();
@@ -2736,6 +3040,43 @@ function bindEvents() {
   els.speechVolume.addEventListener("change", saveSpeechRange);
   els.speakStop.addEventListener("click", stopSpeaking);
   els.clipboardBtn.addEventListener("click", takeFromClipboard);
+  els.attachBtn.addEventListener("click", handleAttachClick);
+  els.attachInput.addEventListener("change", async (event) => {
+    await addFiles(event.target.files);
+    event.target.value = "";
+  });
+  els.previewClose.addEventListener("click", closePreview);
+  els.deleteAllChats.addEventListener("click", deleteAllChats);
+  document.addEventListener("paste", (event) => {
+    if (els.modal.hidden === false || state.settingsOpen) {
+      return;
+    }
+    attachFromPaste(event);
+  });
+  document.addEventListener("dragover", (event) => {
+    if (!event.dataTransfer?.types?.includes("Files")) {
+      return;
+    }
+    event.preventDefault();
+    state.dragging = true;
+    showDropHint(true);
+  });
+  document.addEventListener("dragleave", (event) => {
+    if (event.relatedTarget) {
+      return;
+    }
+    state.dragging = false;
+    showDropHint(false);
+  });
+  document.addEventListener("drop", async (event) => {
+    if (!event.dataTransfer?.files?.length) {
+      return;
+    }
+    event.preventDefault();
+    state.dragging = false;
+    showDropHint(false);
+    await addFiles(event.dataTransfer.files);
+  });
   els.memoryToggle.addEventListener("click", toggleMemoryEnabled);
   els.memoryClear.addEventListener("click", clearMemory);
   els.memoryExport.addEventListener("click", exportMemory);
@@ -2759,6 +3100,11 @@ function bindEvents() {
       if (!state.modalBusy) {
         answerConfirm("reject");
       }
+      return;
+    }
+    if (!els.preview.hidden) {
+      event.preventDefault();
+      closePreview();
       return;
     }
     if (state.settingsOpen) {

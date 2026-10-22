@@ -8,6 +8,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import socket
 import sys
 import threading
@@ -52,6 +53,7 @@ class SpeechUnavailable(Exception):
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+import attachments  # noqa: E402
 import memory  # noqa: E402
 import policy  # noqa: E402
 import reminders  # noqa: E402
@@ -73,6 +75,7 @@ CSP = (
 class TaskIn(BaseModel):
     task: str = ""
     chat_id: str = ""
+    attachments: list[dict] = []
 
 
 class ConfirmIn(BaseModel):
@@ -90,12 +93,20 @@ class ReminderIn(BaseModel):
     minutes: int = 0
 
 
+class AttachmentIn(BaseModel):
+    chat_id: str = ""
+    name: str = ""
+    data: str = ""
+    id: str = ""
+
+
 @dataclass
 class TaskState:
     task: str
     chat_id: str = ""
     user_message_id: str = ""
     history: list[dict] = field(default_factory=list)
+    attachments: list[dict] = field(default_factory=list)
     proc: asyncio.subprocess.Process | None = None
     stderr: deque = field(default_factory=lambda: deque(maxlen=40))
     stderr_task: asyncio.Task | None = None
@@ -328,6 +339,11 @@ def _clean_message(item) -> dict | None:
         task_id = str(item.get("task_id") or "")[:32]
         if task_id:
             message["task_id"] = task_id
+    else:
+        # Вложения хранятся без содержимого: только ссылки и метаданные.
+        attached = _clean_attachments(item.get("attachments"), keep_text=False)
+        if attached:
+            message["attachments"] = attached
     return message
 
 
@@ -386,6 +402,58 @@ def _legacy_chat(tasks: list[dict]) -> dict:
         "updated_at": newest,
         "messages": messages,
     }
+
+
+def _clean_attachments(items, keep_text: bool = True) -> list[dict]:
+    """Оставляет только нужные поля вложения. Никакого base64 в чате."""
+    clean = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        name = policy.safe_attachment_name(str(item.get("name") or "файл"))
+        kind = str(item.get("kind") or "text")
+        if kind not in ("image", "text", "document"):
+            kind = "text"
+        entry = {
+            "id": str(item.get("id") or "")[:32],
+            "name": name,
+            "kind": kind,
+            "size": int(item.get("size") or 0),
+            "original_size": int(item.get("original_size") or 0),
+            "file": Path(str(item.get("file") or "")).name,
+            "thumb": Path(str(item.get("thumb") or "")).name,
+            "tokens": int(item.get("tokens") or 0),
+            "truncated": bool(item.get("truncated")),
+        }
+        if keep_text:
+            entry["text"] = str(item.get("text") or "")[:200_000]
+        clean.append(entry)
+    return clean[: policy.MAX_ATTACHMENTS]
+
+
+def _history_text(message: dict) -> str:
+    """Текст сообщения для истории. Картинки в следующих сообщениях не шлём."""
+    text = str(message.get("text") or "")[:4000]
+    items = message.get("attachments") or []
+    if not items:
+        return text
+    notes = " ".join(attachments.summary_line(item) for item in items)
+    return f"{text}\n{notes}".strip()[:4000]
+
+
+def _move_pending_attachments(chat_id: str) -> None:
+    """Переносит вложения нового чата из временной папки в папку чата."""
+    pending = attachments.attachments_dir("pending")
+    if not pending.is_dir():
+        return
+    target = attachments.attachments_dir(chat_id)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        for item in pending.iterdir():
+            shutil.move(str(item), str(target / item.name))
+        shutil.rmtree(pending, ignore_errors=True)
+    else:
+        shutil.move(str(pending), str(target))
 
 
 def _load_store() -> dict:
@@ -632,7 +700,13 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
         )
         await _write_command(
             state.proc,
-            {"type": "run", "task": state.task, "history": state.history},
+            {
+                "type": "run",
+                "task": state.task,
+                "history": state.history,
+                "attachments": state.attachments,
+                "chat_id": state.chat_id,
+            },
         )
 
     def cancelled_event(state: TaskState) -> dict:
@@ -903,6 +977,66 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
             "file": f"omega-memory-{datetime.now().strftime('%Y%m%d-%H%M%S')}.txt",
         }
 
+    @app.post("/api/attachments/upload")
+    async def attachment_upload(payload: AttachmentIn):
+        """Принимает вложение: проверяет, обрабатывает и сохраняет."""
+        name = policy.safe_attachment_name(payload.name)
+        kind, reason = policy.attachment_kind(name)
+        if not kind:
+            return JSONResponse({"error": reason}, status_code=400)
+        try:
+            raw = attachments.decode_payload(payload.data)
+        except Exception:  # noqa: BLE001
+            return JSONResponse({"error": "Не удалось прочитать файл."}, status_code=400)
+
+        limit = (
+            policy.MAX_IMAGE_BYTES
+            if kind == "image"
+            else policy.MAX_TEXT_BYTES
+            if kind == "text"
+            else policy.MAX_DOCUMENT_BYTES
+        )
+        if len(raw) > limit:
+            return JSONResponse(
+                {
+                    "error": (
+                        f"Файл слишком большой: {policy.human_size(len(raw))}. "
+                        f"Максимум {policy.human_size(limit)}."
+                    )
+                },
+                status_code=400,
+            )
+
+        chat_id = policy.safe_chat_folder(payload.chat_id or "pending")
+        meta, error = attachments.save_attachment(chat_id, name, raw, kind)
+        if meta is None:
+            return JSONResponse({"error": error}, status_code=400)
+        return {"ok": True, "attachment": meta}
+
+    @app.get("/api/attachments/file")
+    async def attachment_file(chat_id: str = "", name: str = ""):
+        """Отдаёт картинку вложения для превью."""
+        try:
+            path = attachments.attachment_path(chat_id, name)
+        except ValueError:
+            return JSONResponse({"error": "Нет такого файла."}, status_code=404)
+        if not path.is_file():
+            return JSONResponse({"error": "Нет такого файла."}, status_code=404)
+        try:
+            payload = path.read_bytes()
+        except OSError:
+            return JSONResponse({"error": "Не удалось прочитать файл."}, status_code=404)
+        return Response(content=payload, media_type="image/png")
+
+    @app.post("/api/attachments/ocr")
+    async def attachment_ocr(payload: AttachmentIn):
+        """Распознаёт текст в картинке-вложении локально."""
+        chat_id = policy.safe_chat_folder(payload.chat_id or "pending")
+        text, error = attachments.ocr_attachment(chat_id, payload.id)
+        if error:
+            return JSONResponse({"error": error}, status_code=400)
+        return {"ok": True, "text": text, "tokens": policy.estimate_text_tokens(text)}
+
     @app.get("/api/reminders")
     async def reminders_list():
         """Активные напоминания."""
@@ -933,6 +1067,18 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
     @app.get("/api/chats")
     async def chats_list():
         return {"chats": _load_store()["chats"]}
+
+    @app.delete("/api/chats")
+    async def delete_all_chats():
+        """Удаляет все чаты вместе с вложениями."""
+        async with app.state.history_lock:
+            store = _load_store()
+            count = len(store["chats"])
+            store["chats"] = []
+            store["tasks"] = []
+            _save_store(store["tasks"], store["chats"])
+            removed = attachments.clear_all_attachments()
+        return {"ok": True, "chats": count, "folders": removed}
 
     @app.delete("/api/chats/{chat_id}")
     async def delete_chat(chat_id: str):
@@ -970,6 +1116,7 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
                 if task.get("chat_id") != chat_id and task.get("id") not in task_ids
             ]
             _save_store(store["tasks"], store["chats"])
+            attachments.delete_chat_attachments(chat_id)
         return {"ok": True}
 
     @app.delete("/api/chats/{chat_id}/messages/{message_id}")
@@ -1075,16 +1222,20 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
                 if chat is None:
                     chat = _new_chat(task)
                     store["chats"].insert(0, chat)
+                attachments = _clean_attachments(payload.attachments)
+                if attachments:
+                    _move_pending_attachments(chat["id"])
                 stamp = _now()
                 message_id = uuid.uuid4().hex[:12]
-                chat["messages"].append(
-                    {
-                        "id": message_id,
-                        "role": "user",
-                        "text": task,
-                        "created_at": stamp,
-                    }
-                )
+                message = {
+                    "id": message_id,
+                    "role": "user",
+                    "text": task,
+                    "created_at": stamp,
+                }
+                if attachments:
+                    message["attachments"] = attachments
+                chat["messages"].append(message)
                 chat["updated_at"] = stamp
                 if chat["title"] in ("", "Новый чат"):
                     chat["title"] = _chat_title(task)
@@ -1095,11 +1246,11 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
                 history = [
                     {
                         "role": message["role"],
-                        "content": str(message.get("text") or "")[:4000],
+                        "content": _history_text(message),
                     }
                     for message in chat["messages"][:-1][-10:]
                     if message.get("role") in ("user", "assistant")
-                    and message.get("text")
+                    and (message.get("text") or message.get("attachments"))
                 ]
                 _save_store(store["tasks"], store["chats"])
             state = TaskState(
@@ -1107,6 +1258,7 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
                 chat_id=chat["id"],
                 user_message_id=message_id,
                 history=history,
+                attachments=attachments,
             )
             app.state.active = state
         return StreamingResponse(
