@@ -1974,6 +1974,7 @@ function applyModelNote(model) {
   const parts = [
     caps.tools ? "инструменты работают" : "только чат, инструменты недоступны",
     caps.multiTurn ? "контекст диалога работает" : "контекст диалога может теряться",
+    caps.vision ? "картинки понимает" : "картинки не понимает",
   ];
   if (caps.warning) {
     parts.push(caps.warning);

@@ -66,29 +66,34 @@ MODEL_OPTIONS = (
 )
 # Возможности проверены запросами к AITunnel 22.10.2026:
 # у всех четырёх моделей работают вызовы инструментов и многоходовые диалоги.
+# Зрение проверено 22.10.2026 картинкой 96x96 с буквой: все четыре назвали её.
 MODEL_CAPS: dict[str, dict[str, object]] = {
     "claude-haiku-5.5": {
         "label": "Haiku 5.5",
         "tools": True,
         "multi_turn": True,
+        "vision": True,
         "warning": "",
     },
     "deepseek-v4.1-flash": {
         "label": "DEEPSEEK V4.1 Flash",
         "tools": True,
         "multi_turn": True,
+        "vision": True,
         "warning": "",
     },
     "glm-5.3-flash": {
         "label": "GLM 5.3 Flash",
         "tools": True,
         "multi_turn": True,
+        "vision": True,
         "warning": "",
     },
     "gpt-6-luna": {
         "label": "GPT 6 Luna",
         "tools": True,
         "multi_turn": True,
+        "vision": True,
         "warning": "",
     },
 }
@@ -121,6 +126,7 @@ def model_info(model: str | None = None) -> dict[str, object]:
         "label": name,
         "tools": True,
         "multi_turn": True,
+        "vision": False,
         "warning": "Модель не проверялась: возможности неизвестны.",
     }
 

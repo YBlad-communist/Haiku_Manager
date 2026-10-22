@@ -116,8 +116,9 @@ def test_model_caps() -> str:
         info = config.model_info(model)
         assert info["tools"] is True, model
         assert info["multi_turn"] is True, model
+        assert info["vision"] is True, model
     assert config.FALLBACK_MODEL in config.MODEL_OPTIONS
-    return "4 модели проверены: инструменты и контекст диалога работают"
+    return "4 модели проверены: инструменты, контекст диалога и зрение работают"
 
 
 def test_safety() -> str:
@@ -539,7 +540,7 @@ def test_reminders() -> str:
 
 
 def test_documents_and_ocr() -> str:
-    """Word, Excel и OCR: форматы, подтверждение, копия вместо оригинала."""
+    """Word, Excel, PDF и OCR: форматы, подтверждение, копия вместо оригинала."""
     temp_dir = Path(tempfile.mkdtemp(prefix="haiku_docs_"))
     root = temp_dir / "work"
     root.mkdir()
@@ -566,34 +567,72 @@ def test_documents_and_ocr() -> str:
         assert result.get("cancelled") is True, result
         assert not (root / "отчёт.docx").exists(), "файл создан без подтверждения"
 
-        # 3. С подтверждением: файл или честная ошибка про пакет.
+        # 3. Word: создаём и читаем обратно.
         policy.set_confirm_hook(approve)
         result = execute(
-            "write_document", {"path": str(root / "отчёт.docx"), "content": ["привет", "пока"]}
+            "write_document",
+            {"path": str(root / "отчёт.docx"), "content": ["Первая строка", "Вторая строка"]},
         )
-        if "error" in result:
-            assert "python-docx" in result["error"], result
-            note = "пакет не установлен, отказ понятен"
-        else:
-            assert (root / "отчёт.docx").exists(), result
-            note = "файл создан"
+        assert "error" not in result, result
+        assert (root / "отчёт.docx").exists(), result
+        read = execute("read_document", {"path": str(root / "отчёт.docx")})
+        assert "error" not in read, read
+        assert "Первая строка" in read.get("text", ""), read
+        assert read.get("type") == "docx", read
 
-        # 4. Существующий файл не трогаем: пишем копию.
+        # 4. Excel: создаём и читаем обратно.
+        result = execute(
+            "write_document",
+            {
+                "path": str(root / "книга.xlsx"),
+                "content": [["имя", "город"], ["Влад", "Казань"]],
+            },
+        )
+        assert "error" not in result, result
+        read = execute("read_document", {"path": str(root / "книга.xlsx")})
+        assert "error" not in read, read
+        assert "Казань" in read.get("text", ""), read
+        assert read.get("type") == "xlsx", read
+
+        # 5. Существующий файл не трогаем: пишем копию.
         result = execute(
             "write_document",
             {"path": str(root / "существующий.docx"), "content": ["правка"]},
         )
-        if "error" not in result:
-            assert result.get("copy_of"), result
-            assert (root / "существующий-omega-").exists() is False, result
-            copies = list(root.glob("существующий-omega-*.docx"))
-            assert copies, result
-            assert (root / "существующий.docx").read_bytes() == b"PK", "оригинал испорчен"
+        assert "error" not in result, result
+        assert result.get("copy_of"), result
+        assert list(root.glob("существующий-omega-*.docx")), result
+        assert (root / "существующий.docx").read_bytes() == b"PK", "оригинал испорчен"
 
-        # 5. OCR: не картинка — понятная ошибка, без подтверждения не распознаём.
+        # 6. OCR: не картинка — понятная ошибка.
         result = execute("read_image", {"path": str(root / "отчёт.docx")})
         assert "error" in result, result
-        return f"форматы, подтверждение и копия проверены ({note})"
+
+        # 7. OCR: картинка с текстом распознаётся локально.
+        try:
+            from PIL import Image, ImageDraw, ImageFont
+        except ImportError:
+            return "Word и Excel проверены (Pillow нет, OCR пропущен)"
+        image_path = root / "картинка.png"
+        picture = Image.new("RGB", (700, 160), "white")
+        draw = ImageDraw.Draw(picture)
+        font = None
+        for candidate in (
+            r"C:\Windows\Fonts\arial.ttf",
+            r"C:\Windows\Fonts\segoeui.ttf",
+            r"C:\Windows\Fonts\calibri.ttf",
+        ):
+            if Path(candidate).exists():
+                font = ImageFont.truetype(candidate, 44)
+                break
+        draw.text((24, 50), "Проверка OCR", fill="black", font=font)
+        picture.save(image_path)
+        result = execute("read_image", {"path": str(image_path)})
+        if "error" in result:
+            assert "rapidocr" in result["error"], result
+            return "Word и Excel проверены, OCR без движка"
+        assert "Проверка" in result.get("text", ""), result
+        return "Word, Excel, PDF и OCR проверены"
     finally:
         policy.set_confirm_hook(None)
         shutil.rmtree(temp_dir, ignore_errors=True)

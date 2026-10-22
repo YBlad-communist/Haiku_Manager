@@ -72,31 +72,51 @@ def _make_preview(target: Path) -> tuple[str, str]:
     return name, ""
 
 
-def _ocr_text(target: Path) -> tuple[str, str]:
-    """Распознаёт текст. Возвращает (текст, ошибка)."""
+_ENGINE = None
+
+
+def get_engine():
+    """Движок распознавания. Русская модель грузится один раз и живёт в памяти."""
+    global _ENGINE
+    if _ENGINE is not None:
+        return _ENGINE
+    from rapidocr import LangRec, OCRVersion, RapidOCR  # noqa: PLC0415
+    from rapidocr.utils.typings import ModelType  # noqa: PLC0415
+
+    _ENGINE = RapidOCR(
+        params={
+            "Rec.ocr_version": OCRVersion.PPOCRV5,
+            "Rec.lang_type": LangRec.CYRILLIC,
+            "Rec.model_type": ModelType.MOBILE,
+        }
+    )
+    return _ENGINE
+
+
+def ocr_text(target: Path) -> tuple[str, str]:
+    """Распознаёт текст в картинке. Возвращает (текст, ошибка)."""
     try:
-        from rapidocr_onnxruntime import RapidOCR  # noqa: PLC0415
+        engine = get_engine()
     except ImportError:
         return "", (
-            "Нужен пакет rapidocr-onnxruntime==1.4.4. Он ещё не установлен — "
+            "Нужен пакет rapidocr==3.10.0. Он ещё не установлен — "
             "скажи Омеге, и мы поставим его с твоего подтверждения."
         )
+    except Exception as exc:  # noqa: BLE001
+        return "", f"Не удалось загрузить модель распознавания: {exc}"
     try:
-        engine = RapidOCR()
-        result, _elapsed = engine(str(target))
+        result = engine(str(target))
     except Exception as exc:  # noqa: BLE001
         return "", f"Не удалось распознать текст: {exc}"
-    if not result:
+    texts = getattr(result, "txts", None) or ()
+    lines = [str(item).strip() for item in texts if str(item).strip()]
+    if not lines:
         return "", "На картинке не нашлось текста."
-    lines = []
-    for item in result:
-        try:
-            text = str(item[1]).strip()
-        except (IndexError, TypeError):
-            continue
-        if text:
-            lines.append(text)
     return "\n".join(lines)[:MAX_TEXT_CHARS], ""
+
+
+def _ocr_text(target: Path) -> tuple[str, str]:
+    return ocr_text(target)
 
 
 def read_image(path: str) -> dict:

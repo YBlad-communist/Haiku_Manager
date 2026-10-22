@@ -9,6 +9,7 @@ const MODELS = [
     label: "DEEPSEEK V4.1 Flash",
     tools: true,
     multiTurn: true,
+    vision: true,
     warning: "",
   },
   {
@@ -16,6 +17,7 @@ const MODELS = [
     label: "GLM 5.3 Flash",
     tools: true,
     multiTurn: true,
+    vision: true,
     warning: "",
   },
   {
@@ -23,6 +25,7 @@ const MODELS = [
     label: "GPT 6 Luna",
     tools: true,
     multiTurn: true,
+    vision: true,
     warning: "",
   },
   {
@@ -30,6 +33,7 @@ const MODELS = [
     label: "Haiku 5.5",
     tools: true,
     multiTurn: true,
+    vision: true,
     warning: "",
   },
 ];
