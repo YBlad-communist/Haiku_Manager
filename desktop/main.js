@@ -549,6 +549,7 @@ function registerIpc() {
       "autostart",
       "budget_limit_rub",
       "voice_language",
+      "sales_module",
       "model",
       "system_prompt",
       "theme",

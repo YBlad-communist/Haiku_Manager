@@ -15,7 +15,7 @@ from .messages import draft_message, send_message
 from .computer import COMPUTER_TOOLS, HANDLERS as COMPUTER_HANDLERS
 
 
-TOOLS: list[dict] = [
+ALL_TOOLS: list[dict] = [
     {
         "type": "function",
         "function": {
@@ -66,8 +66,8 @@ TOOLS: list[dict] = [
         "function": {
             "name": "save_to_table",
             "description": (
-                "Сохранить строки в CSV-таблицу в папке data/. Используй для списков "
-                "компаний, сравнений цен и любых результатов, которые нужны в таблице. "
+                "Сохранить строки в CSV-таблицу в папке data/. Используй для списков, "
+                "сравнений и любых результатов, которые нужны в таблице. "
                 "Повторы (то же название и адрес) не добавляются. "
                 "Колонки называй латиницей: name, category, city, address, phone, "
                 "website, has_website, rating, reviews_count, source_url, note. "
@@ -196,6 +196,26 @@ TOOLS: list[dict] = [
 ] + COMPUTER_TOOLS
 
 
+SALES_TOOL_NAMES = frozenset(
+    {"search_companies_2gis", "draft_message", "send_message"}
+)
+
+
+def get_tools() -> list[dict]:
+    """Отдаёт модели только инструменты включённых модулей."""
+    if config.current_sales_module():
+        return list(ALL_TOOLS)
+    return [
+        tool
+        for tool in ALL_TOOLS
+        if tool["function"]["name"] not in SALES_TOOL_NAMES
+    ]
+
+
+# Оставлено для совместимости: агенту нужно вызывать get_tools(), а не этот снимок.
+TOOLS = list(ALL_TOOLS)
+
+
 HANDLERS: dict[str, Callable[..., dict]] = {
     "search_web": search_web,
     "fetch_page": fetch_page,
@@ -209,6 +229,13 @@ HANDLERS: dict[str, Callable[..., dict]] = {
 
 def execute(name: str, arguments: dict[str, Any]) -> dict:
     """Выполняет инструмент и возвращает результат-словарь. Ошибки не роняют агент."""
+    if name in SALES_TOOL_NAMES and not config.current_sales_module():
+        return {
+            "error": (
+                "Модуль продаж выключен. Включи его в настройках Омеги, "
+                "если нужны 2ГИС, черновики или отправка сообщений."
+            )
+        }
     handler = HANDLERS.get(name)
     if handler is None:
         return {"error": f"Неизвестный инструмент: {name}"}

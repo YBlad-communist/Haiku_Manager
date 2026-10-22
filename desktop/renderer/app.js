@@ -72,6 +72,7 @@ const els = {
   autostartToggle: document.getElementById("autostartToggle"),
   budgetInput: document.getElementById("budgetInput"),
   voiceLanguage: document.getElementById("voiceLanguage"),
+  salesToggle: document.getElementById("salesToggle"),
   modelSelect: document.getElementById("modelSelect"),
   themeSelect: document.getElementById("themeSelect"),
   systemPrompt: document.getElementById("systemPrompt"),
@@ -1623,6 +1624,9 @@ function applySettingsToUi() {
   if (document.activeElement !== els.voiceLanguage) {
     els.voiceLanguage.value = voiceLanguage;
   }
+  const salesModule = Boolean(state.settings.sales_module);
+  els.salesToggle.setAttribute("aria-checked", String(salesModule));
+  els.salesToggle.classList.toggle("on", salesModule);
   const model = ["deepseek-v4.1-flash", "glm-5.3-flash", "gpt-6-luna", "claude-haiku-5.5"]
     .includes(state.settings.model)
     ? state.settings.model
@@ -1802,6 +1806,23 @@ async function saveVoiceLanguage() {
   }
 }
 
+async function toggleSalesModule() {
+  if (!state.settings || state.settingsBusy) {
+    return;
+  }
+  state.settingsBusy = true;
+  els.salesToggle.disabled = true;
+  const desired = !state.settings.sales_module;
+  const ok = await saveSettingsPatch({ sales_module: desired });
+  els.salesToggle.disabled = false;
+  state.settingsBusy = false;
+  if (ok) {
+    showToast(desired ? "Модуль продаж включён." : "Модуль продаж выключен.");
+  } else {
+    applySettingsToUi();
+  }
+}
+
 async function saveModel() {
   if (!state.settings || state.settingsBusy) {
     return;
@@ -1958,6 +1979,7 @@ function bindEvents() {
   });
   els.budgetInput.addEventListener("blur", saveBudget);
   els.voiceLanguage.addEventListener("change", saveVoiceLanguage);
+  els.salesToggle.addEventListener("click", toggleSalesModule);
   els.modelSelect.addEventListener("change", saveModel);
   els.themeSelect.addEventListener("change", saveTheme);
   els.systemPrompt.addEventListener("blur", saveSystemPrompt);

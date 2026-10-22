@@ -17,6 +17,7 @@ const DEFAULTS = {
   autostart: false,
   budget_limit_rub: 500,
   voice_language: "ru",
+  sales_module: false,
   model: "claude-haiku-5.5",
   system_prompt: "",
   theme: "light",
@@ -51,6 +52,10 @@ function sanitizeSettings(value, base = DEFAULTS) {
   const voiceLanguage = ["ru", "en", "auto"].includes(source.voice_language)
     ? source.voice_language
     : base.voice_language || "ru";
+  const salesModule =
+    typeof source.sales_module === "boolean"
+      ? source.sales_module
+      : Boolean(base.sales_module);
   const model = MODEL_IDS.has(source.model)
     ? source.model
     : MODEL_IDS.has(base.model)
@@ -75,6 +80,7 @@ function sanitizeSettings(value, base = DEFAULTS) {
     autostart: Boolean(source.autostart),
     budget_limit_rub: budget,
     voice_language: voiceLanguage,
+    sales_module: salesModule,
     model,
     system_prompt: systemPrompt,
     theme,

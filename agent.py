@@ -9,7 +9,7 @@ from typing import Any
 import config
 import safety
 from llm import BudgetExceeded, LLM
-from tools import TOOLS, execute
+from tools import execute, get_tools
 
 
 PROMPT_FILE = Path(config.PROMPT_FILE)
@@ -96,13 +96,14 @@ def run(
     stopped_reason = "done"
     answer = ""
     steps = 0
+    available_tools = get_tools()
 
     try:
         for step in range(1, limit + 1):
             steps = step
             if verbose:
                 print(f"[шаг {step}] думаю...")
-            response = llm.chat(messages, tools=TOOLS)
+            response = llm.chat(messages, tools=available_tools)
             message = response.choices[0].message
             finish_reason = response.choices[0].finish_reason
 

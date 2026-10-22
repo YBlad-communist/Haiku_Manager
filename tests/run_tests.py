@@ -18,7 +18,12 @@ sys.path.insert(0, str(PROJECT_DIR))
 
 import config  # noqa: E402
 import safety  # noqa: E402
-from tools import execute, TOOLS  # noqa: E402
+from tools import (  # noqa: E402
+    SALES_TOOL_NAMES,
+    TOOLS,
+    execute,
+    get_tools,
+)
 from tools.fetch_page import fetch_page  # noqa: E402
 from tools.http import HttpError  # noqa: E402
 from tools.save_to_table import save_to_table  # noqa: E402
@@ -65,6 +70,24 @@ def test_tools_schema() -> str:
         "write_file", "create_folder", "open_path", "launch_app",
     }, names
     return "12 инструментов"
+
+
+def test_sales_module_filter() -> str:
+    original = config.current_sales_module
+    try:
+        config.current_sales_module = lambda: False
+        names_off = {tool["function"]["name"] for tool in get_tools()}
+        assert names_off.isdisjoint(SALES_TOOL_NAMES), names_off & SALES_TOOL_NAMES
+        assert len(names_off) == 9, len(names_off)
+        blocked = execute("search_companies_2gis", {"query": "тест", "city": "тест"})
+        assert "Модуль продаж выключен" in blocked.get("error", ""), blocked
+
+        config.current_sales_module = lambda: True
+        names_on = {tool["function"]["name"] for tool in get_tools()}
+        assert names_on == {tool["function"]["name"] for tool in TOOLS}
+        return "выключен: 9 инструментов, включён: 12"
+    finally:
+        config.current_sales_module = original
 
 
 def test_safety() -> str:
@@ -249,6 +272,7 @@ def main() -> int:
 
     check("config", test_config)
     check("схема инструментов", test_tools_schema)
+    check("модуль продаж: фильтр инструментов", test_sales_module_filter)
     check("безопасность", test_safety)
     check("search_web (заглушка)", test_search_stub)
     check("save_to_table", test_save_csv)
