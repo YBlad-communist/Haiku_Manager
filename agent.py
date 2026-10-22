@@ -31,13 +31,17 @@ SYSTEM_PROMPT = load_system_prompt()
 
 
 def get_system_prompt() -> str:
+    """Итоговый промт: редактируемая часть из настроек + неизменяемые правила."""
     try:
         prompt = config.current_system_prompt()
     except OSError as exc:
         safety.log_event("prompt_load_error", error=str(exc)[:300])
+        prompt = ""
+    if not prompt.strip():
         prompt = load_system_prompt()
-    if not prompt:
-        prompt = load_system_prompt()
+        policy = config.policy_text()
+        if policy:
+            prompt = f"{prompt}\n\n{config.POLICY_HEADER}\n{policy}"
     return prompt
 
 
@@ -220,6 +224,20 @@ def run(
 
     if not answer:
         answer = "Модель не вернула текст. Посмотри журнал logs/agent.log."
+
+    notes: list[str] = []
+    if llm.used_fallback:
+        notes.append(
+            f"Выбранная модель не ответила — задачу выполнила {llm.model}. "
+            "Это честный запасной вариант, качество может отличаться."
+        )
+    if llm.tools_unavailable:
+        notes.append(
+            "Модель не поддерживает инструменты: ответ без доступа к файлам, "
+            "поиску и 2ГИС."
+        )
+    if notes:
+        answer = f"{answer}\n\n> [!важно]\n" + "\n".join(notes)
 
     return {
         "answer": answer,

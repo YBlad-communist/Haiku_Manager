@@ -18,12 +18,23 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const {
+  MODELS,
+  PROMPT_LIMIT,
   loadSettings,
+  readDefaultPrompt,
   sanitizeSettings,
   saveSettings,
 } = require("./settings");
 
 const PROJECT_ROOT = path.resolve(__dirname, "..");
+
+function readTextFile(file) {
+  try {
+    return fs.readFileSync(file, "utf8").trim();
+  } catch {
+    return "";
+  }
+}
 const DEFAULT_CONFIG = {
   hotkey: "CommandOrControl+Space",
   python: { command: "py", args: ["-3.14"] },
@@ -551,7 +562,7 @@ function registerIpc() {
       "voice_language",
       "sales_module",
       "model",
-      "system_prompt",
+      "user_prompt",
       "theme",
     ]) {
       if (Object.prototype.hasOwnProperty.call(patch, key)) {
@@ -559,6 +570,18 @@ function registerIpc() {
       }
     }
     return updateSettings(allowed);
+  });
+
+  ipcMain.handle("omega:prompt-info", (event) => {
+    if (!mainWindow || event.sender !== mainWindow.webContents) {
+      return null;
+    }
+    return {
+      policy: readTextFile(path.join(PROJECT_ROOT, "prompts", "policy.md")),
+      default_prompt: readDefaultPrompt(PROJECT_ROOT),
+      limit: PROMPT_LIMIT,
+      models: MODELS,
+    };
   });
 }
 

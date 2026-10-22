@@ -17,6 +17,7 @@ const state = {
   chats: [],
   recordingHotkey: false,
   settingsBusy: false,
+  promptInfo: null,
   voiceToken: 0,
   voiceRecording: false,
   voiceBusy: false,
@@ -74,8 +75,12 @@ const els = {
   voiceLanguage: document.getElementById("voiceLanguage"),
   salesToggle: document.getElementById("salesToggle"),
   modelSelect: document.getElementById("modelSelect"),
+  modelNote: document.getElementById("modelNote"),
   themeSelect: document.getElementById("themeSelect"),
-  systemPrompt: document.getElementById("systemPrompt"),
+  userPrompt: document.getElementById("userPrompt"),
+  promptCounter: document.getElementById("promptCounter"),
+  promptReset: document.getElementById("promptReset"),
+  policyView: document.getElementById("policyView"),
   voiceCircle: document.getElementById("voiceCircle"),
   voiceBars: document.getElementById("voiceBars"),
   voiceTitle: document.getElementById("voiceTitle"),
@@ -87,6 +92,7 @@ const els = {
   voiceCancel: document.getElementById("voiceCancel"),
 };
 
+const PROMPT_LIMIT = 4000;
 const VOICE_MAX_MS = 60_000;
 const VOICE_MIN_BYTES = 800;
 const VOICE_MIME_TYPES = [
@@ -1605,6 +1611,37 @@ function applyTheme(value) {
   document.documentElement.dataset.theme = theme;
 }
 
+function promptLimit() {
+  const limit = Number(state.promptInfo?.limit);
+  return Number.isFinite(limit) && limit > 0 ? limit : PROMPT_LIMIT;
+}
+
+function updatePromptCounter() {
+  const value = els.userPrompt.value || "";
+  const limit = promptLimit();
+  els.promptCounter.textContent = `${value.length} / ${limit}`;
+  els.promptCounter.classList.toggle("near-limit", value.length > limit * 0.9);
+}
+
+function applyModelNote(model) {
+  const caps = (state.promptInfo?.models || []).find((item) => item.id === model);
+  if (!caps) {
+    els.modelNote.textContent = "";
+    els.modelNote.hidden = true;
+    return;
+  }
+  const parts = [
+    caps.tools ? "инструменты работают" : "только чат, инструменты недоступны",
+    caps.multiTurn ? "контекст диалога работает" : "контекст диалога может теряться",
+  ];
+  if (caps.warning) {
+    parts.push(caps.warning);
+  }
+  els.modelNote.textContent = parts.join(" · ");
+  els.modelNote.hidden = false;
+  els.modelNote.classList.toggle("warn", !caps.tools || Boolean(caps.warning));
+}
+
 function applySettingsToUi() {
   if (!state.settings) {
     return;
@@ -1639,9 +1676,11 @@ function applySettingsToUi() {
     els.themeSelect.value = theme;
   }
   applyTheme(theme);
-  if (document.activeElement !== els.systemPrompt) {
-    els.systemPrompt.value = state.settings.system_prompt || "";
+  if (document.activeElement !== els.userPrompt) {
+    els.userPrompt.value = state.settings.user_prompt || "";
   }
+  updatePromptCounter();
+  applyModelNote(state.settings.model);
 }
 
 async function saveSettingsPatch(patch) {
@@ -1681,6 +1720,14 @@ async function openSettings() {
       throw new Error("Приложение не передало настройки.");
     }
     state.settings = settings;
+    const info = await window.omega.getPromptInfo();
+    if (info) {
+      state.promptInfo = info;
+      els.policyView.textContent = info.policy || "";
+      els.userPrompt.maxLength = promptLimit();
+      updatePromptCounter();
+      applyModelNote(settings.model);
+    }
   } catch (error) {
     showToast(error.message || "Не удалось открыть настройки.");
     return;
@@ -1862,21 +1909,32 @@ async function saveTheme() {
   }
 }
 
-async function saveSystemPrompt() {
+async function saveUserPrompt() {
   if (!state.settings || state.settingsBusy) {
-    return;
+    return false;
   }
-  const value = els.systemPrompt.value.trim();
-  if (value === (state.settings.system_prompt || "")) {
-    return;
+  const value = els.userPrompt.value.trim().slice(0, promptLimit());
+  if (value === (state.settings.user_prompt || "")) {
+    return true;
   }
   state.settingsBusy = true;
-  const ok = await saveSettingsPatch({ system_prompt: value });
+  const ok = await saveSettingsPatch({ user_prompt: value });
   state.settingsBusy = false;
   if (ok) {
     showToast("Системный промт сохранён.");
   } else {
     applySettingsToUi();
+  }
+  return ok;
+}
+
+async function resetUserPrompt() {
+  const fallback = (state.promptInfo?.default_prompt || "").slice(0, promptLimit());
+  els.userPrompt.value = fallback;
+  updatePromptCounter();
+  const ok = await saveUserPrompt();
+  if (ok) {
+    showToast("Промт сброшен к стандартному.");
   }
 }
 
@@ -1982,7 +2040,9 @@ function bindEvents() {
   els.salesToggle.addEventListener("click", toggleSalesModule);
   els.modelSelect.addEventListener("change", saveModel);
   els.themeSelect.addEventListener("change", saveTheme);
-  els.systemPrompt.addEventListener("blur", saveSystemPrompt);
+  els.userPrompt.addEventListener("input", updatePromptCounter);
+  els.userPrompt.addEventListener("blur", saveUserPrompt);
+  els.promptReset.addEventListener("click", resetUserPrompt);
 
   document.addEventListener("keydown", (event) => {
     if (event.key === "Tab") {

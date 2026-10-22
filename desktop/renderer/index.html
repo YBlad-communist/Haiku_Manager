@@ -153,6 +153,7 @@
             <option value="gpt-6-luna">GPT 6 Luna</option>
             <option value="claude-haiku-5.5">Haiku 5.5</option>
           </select>
+          <p class="model-note" id="modelNote"></p>
         </section>
 
         <section class="setting">
@@ -169,10 +170,22 @@
         <section class="setting setting-column">
           <div class="setting-text">
             <h3>Системный промт</h3>
-            <p>Характер и правила Омеги. Пустое поле вернёт промт по умолчанию.</p>
+            <p>Редактируемая часть: характер и задачи Омеги. Защитные правила добавляются всегда.</p>
           </div>
-          <textarea class="ci system-prompt" id="systemPrompt" rows="8" maxlength="20000"
-                    aria-label="Системный промт" spellcheck="false"></textarea>
+          <textarea class="ci system-prompt" id="userPrompt" rows="8" maxlength="4000"
+                    aria-label="Системный промт, редактируемая часть" spellcheck="false"></textarea>
+          <div class="prompt-tools">
+            <span class="prompt-counter" id="promptCounter">0 / 4000</span>
+            <button type="button" class="ci btn" id="promptReset">Сбросить к стандартному</button>
+          </div>
+        </section>
+
+        <section class="setting setting-column">
+          <div class="setting-text">
+            <h3>Защитные правила</h3>
+            <p>Эта часть всегда добавляется к промту и не редактируется.</p>
+          </div>
+          <pre class="ci policy-view" id="policyView" aria-label="Неизменяемые защитные правила"></pre>
         </section>
 
         <p class="settings-error" id="settingsError" role="alert" hidden></p>

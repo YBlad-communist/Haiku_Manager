@@ -4,13 +4,37 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const MODELS = [
-  { id: "deepseek-v4.1-flash", label: "DEEPSEEK V4.1 Flash" },
-  { id: "glm-5.3-flash", label: "GLM 5.3 Flash" },
-  { id: "gpt-6-luna", label: "GPT 6 Luna" },
-  { id: "claude-haiku-5.5", label: "Haiku 5.5" },
+  {
+    id: "deepseek-v4.1-flash",
+    label: "DEEPSEEK V4.1 Flash",
+    tools: true,
+    multiTurn: true,
+    warning: "",
+  },
+  {
+    id: "glm-5.3-flash",
+    label: "GLM 5.3 Flash",
+    tools: true,
+    multiTurn: true,
+    warning: "",
+  },
+  {
+    id: "gpt-6-luna",
+    label: "GPT 6 Luna",
+    tools: true,
+    multiTurn: true,
+    warning: "",
+  },
+  {
+    id: "claude-haiku-5.5",
+    label: "Haiku 5.5",
+    tools: true,
+    multiTurn: true,
+    warning: "",
+  },
 ];
 const MODEL_IDS = new Set(MODELS.map((item) => item.id));
-const PROMPT_LIMIT = 20_000;
+const PROMPT_LIMIT = 4000;
 
 const DEFAULTS = {
   hotkey: "CommandOrControl+Space",
@@ -19,7 +43,7 @@ const DEFAULTS = {
   voice_language: "ru",
   sales_module: false,
   model: "claude-haiku-5.5",
-  system_prompt: "",
+  user_prompt: "",
   theme: "light",
 };
 
@@ -61,14 +85,25 @@ function sanitizeSettings(value, base = DEFAULTS) {
     : MODEL_IDS.has(base.model)
       ? base.model
       : DEFAULTS.model;
-  const hasPrompt = Object.prototype.hasOwnProperty.call(source, "system_prompt");
-  const systemPrompt = hasPrompt
-    ? typeof source.system_prompt === "string"
-      ? source.system_prompt.trim().slice(0, PROMPT_LIMIT)
-      : ""
-    : typeof base.system_prompt === "string"
-      ? base.system_prompt
-      : "";
+  const hasPrompt = Object.prototype.hasOwnProperty.call(source, "user_prompt");
+  let userPrompt;
+  if (hasPrompt) {
+    userPrompt =
+      typeof source.user_prompt === "string"
+        ? source.user_prompt.trim().slice(0, PROMPT_LIMIT)
+        : "";
+  } else if (
+    Object.prototype.hasOwnProperty.call(source, "system_prompt") &&
+    typeof source.system_prompt === "string"
+  ) {
+    // Миграция со старой версии: старый полный промт становится редактируемой частью.
+    const legacy = source.system_prompt.trim();
+    const basePrompt =
+      typeof base.system_prompt === "string" ? base.system_prompt.trim() : "";
+    userPrompt = legacy && legacy !== basePrompt ? legacy.slice(0, PROMPT_LIMIT) : "";
+  } else {
+    userPrompt = typeof base.user_prompt === "string" ? base.user_prompt : "";
+  }
   const theme =
     source.theme === "dark" || source.theme === "light"
       ? source.theme
@@ -82,7 +117,7 @@ function sanitizeSettings(value, base = DEFAULTS) {
     voice_language: voiceLanguage,
     sales_module: salesModule,
     model,
-    system_prompt: systemPrompt,
+    user_prompt: userPrompt,
     theme,
   };
 }
@@ -103,14 +138,13 @@ function loadSettings(projectRoot, legacyHotkey = "") {
     }
   }
   const settings = sanitizeSettings(parsed || {}, defaults);
-  if (!settings.system_prompt) {
-    settings.system_prompt = readDefaultPrompt(projectRoot);
-  }
-  if (!parsed) {
+  const hasLegacyPrompt =
+    parsed && Object.prototype.hasOwnProperty.call(parsed, "system_prompt");
+  if (!parsed || hasLegacyPrompt) {
     try {
       saveSettings(projectRoot, settings);
     } catch (error) {
-      console.error("Не удалось создать data/settings.json:", error.message);
+      console.error("Не удалось сохранить data/settings.json:", error.message);
     }
   }
   return settings;
@@ -119,9 +153,6 @@ function loadSettings(projectRoot, legacyHotkey = "") {
 function saveSettings(projectRoot, settings) {
   const file = settingsPath(projectRoot);
   const clean = sanitizeSettings(settings);
-  if (!clean.system_prompt) {
-    clean.system_prompt = readDefaultPrompt(projectRoot);
-  }
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const temp = `${file}.tmp`;
   fs.writeFileSync(temp, `${JSON.stringify(clean, null, 2)}\n`, "utf8");
@@ -132,7 +163,9 @@ function saveSettings(projectRoot, settings) {
 module.exports = {
   DEFAULTS,
   MODELS,
+  PROMPT_LIMIT,
   loadSettings,
+  readDefaultPrompt,
   saveSettings,
   sanitizeSettings,
   settingsPath,

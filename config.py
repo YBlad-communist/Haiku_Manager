@@ -12,6 +12,8 @@ DATA_DIR = PROJECT_DIR / "data"
 LOGS_DIR = PROJECT_DIR / "logs"
 SETTINGS_FILE = DATA_DIR / "settings.json"
 PROMPT_FILE = PROJECT_DIR / "prompts" / "omega.md"
+POLICY_FILE = PROJECT_DIR / "prompts" / "policy.md"
+POLICY_HEADER = "--- НЕИЗМЕНЯЕМЫЕ ЗАЩИТНЫЕ ПРАВИЛА ---"
 
 ENV_FILE = PROJECT_DIR / ".env"
 
@@ -62,6 +64,36 @@ MODEL_OPTIONS = (
     "gpt-6-luna",
     "claude-haiku-5.5",
 )
+# Возможности проверены запросами к AITunnel 22.10.2026:
+# у всех четырёх моделей работают вызовы инструментов и многоходовые диалоги.
+MODEL_CAPS: dict[str, dict[str, object]] = {
+    "claude-haiku-5.5": {
+        "label": "Haiku 5.5",
+        "tools": True,
+        "multi_turn": True,
+        "warning": "",
+    },
+    "deepseek-v4.1-flash": {
+        "label": "DEEPSEEK V4.1 Flash",
+        "tools": True,
+        "multi_turn": True,
+        "warning": "",
+    },
+    "glm-5.3-flash": {
+        "label": "GLM 5.3 Flash",
+        "tools": True,
+        "multi_turn": True,
+        "warning": "",
+    },
+    "gpt-6-luna": {
+        "label": "GPT 6 Luna",
+        "tools": True,
+        "multi_turn": True,
+        "warning": "",
+    },
+}
+# На случай отказа модели: переключаемся на заведомо рабочую и честно говорим об этом.
+FALLBACK_MODEL = "claude-haiku-5.5"
 BASE_URL = os.environ.get("BASE_URL", "https://api.aitunnel.ru/v1/")
 AITUNNEL_API_KEY = os.environ.get("AITUNNEL_API_KEY", "")
 
@@ -79,11 +111,51 @@ def current_model() -> str:
     return value if value in MODEL_OPTIONS else MODEL
 
 
-def current_system_prompt() -> str:
-    value = load_settings().get("system_prompt")
+def model_info(model: str | None = None) -> dict[str, object]:
+    """Возможности выбранной модели: инструменты, многоходовость, предупреждения."""
+    name = model or current_model()
+    info = MODEL_CAPS.get(name)
+    if info:
+        return dict(info)
+    return {
+        "label": name,
+        "tools": True,
+        "multi_turn": True,
+        "warning": "Модель не проверялась: возможности неизвестны.",
+    }
+
+
+def policy_text() -> str:
+    """Неизменяемая часть промта: защитные правила всегда добавляются."""
+    try:
+        return POLICY_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def default_user_prompt() -> str:
+    """Стандартная редактируемая часть промта."""
+    try:
+        return PROMPT_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def current_user_prompt() -> str:
+    """Редактируемая часть промта из настроек или стандартная."""
+    value = load_settings().get("user_prompt")
     if isinstance(value, str) and value.strip():
         return value.strip()
-    return PROMPT_FILE.read_text(encoding="utf-8").strip()
+    return default_user_prompt()
+
+
+def current_system_prompt() -> str:
+    """Итоговый системный промт: редактируемая часть + неизменяемые правила."""
+    user = current_user_prompt()
+    policy = policy_text()
+    if not policy:
+        return user
+    return f"{user}\n\n{POLICY_HEADER}\n{policy}"
 
 
 def current_sales_module() -> bool:

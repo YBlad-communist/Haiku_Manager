@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld("omega", {
   openExternal: (url) => ipcRenderer.invoke("omega:open-external", url),
   getSettings: () => ipcRenderer.invoke("omega:get-settings"),
   saveSettings: (patch) => ipcRenderer.invoke("omega:save-settings", patch),
+  getPromptInfo: () => ipcRenderer.invoke("omega:prompt-info"),
   onFocusInput: (callback) => {
     const handler = () => callback();
     ipcRenderer.on("focus-input", handler);

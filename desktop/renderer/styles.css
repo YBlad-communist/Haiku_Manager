@@ -935,6 +935,58 @@ textarea.draft {
   line-height: 1.4;
 }
 
+.prompt-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.prompt-counter {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.prompt-counter.near-limit {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.prompt-tools .btn {
+  padding: 8px 14px;
+  font-size: 12px;
+}
+
+.policy-view {
+  margin: 0;
+  padding: 14px 16px;
+  border: 1px solid rgba(91, 88, 115, .16);
+  border-radius: 12px;
+  background: rgba(91, 88, 115, .06);
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.model-note {
+  flex: 1 0 100%;
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.model-note.warn {
+  color: var(--accent);
+  font-weight: 700;
+}
+
 .hotkey-input {
   flex: 0 0 190px;
   width: 190px;
