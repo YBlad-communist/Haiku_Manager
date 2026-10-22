@@ -74,9 +74,10 @@ def test_tools_schema() -> str:
         "draft_message", "send_message", "list_files", "read_file",
         "write_file", "create_folder", "delete_files", "open_path",
         "launch_app", "download_file", "screenshot", "memory_propose",
-        "add_reminder", "list_reminders",
+        "add_reminder", "list_reminders", "read_document", "write_document",
+        "read_image",
     }, names
-    return "18 инструментов"
+    return "21 инструмент"
 
 
 def test_sales_module_filter() -> str:
@@ -85,14 +86,14 @@ def test_sales_module_filter() -> str:
         config.current_sales_module = lambda: False
         names_off = {tool["function"]["name"] for tool in get_tools()}
         assert names_off.isdisjoint(SALES_TOOL_NAMES), names_off & SALES_TOOL_NAMES
-        assert len(names_off) == 15, len(names_off)
+        assert len(names_off) == 18, len(names_off)
         blocked = execute("search_companies_2gis", {"query": "тест", "city": "тест"})
         assert "Модуль продаж выключен" in blocked.get("error", ""), blocked
 
         config.current_sales_module = lambda: True
         names_on = {tool["function"]["name"] for tool in get_tools()}
         assert names_on == {tool["function"]["name"] for tool in TOOLS}
-        return "выключен: 15 инструментов, включён: 18"
+        return "выключен: 18 инструментов, включён: 21"
     finally:
         config.current_sales_module = original
 
@@ -537,6 +538,67 @@ def test_reminders() -> str:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+def test_documents_and_ocr() -> str:
+    """Word, Excel и OCR: форматы, подтверждение, копия вместо оригинала."""
+    temp_dir = Path(tempfile.mkdtemp(prefix="haiku_docs_"))
+    root = temp_dir / "work"
+    root.mkdir()
+    (root / "старый.doc").write_bytes(b"old")
+    (root / "макросы.xlsm").write_bytes(b"macro")
+    (root / "картинка.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    (root / "существующий.docx").write_bytes(b"PK")
+
+    def approve(payload: dict) -> dict:
+        return {"action": "approve"}
+
+    policy.set_confirm_hook(approve)
+    try:
+        # 1. Старые форматы и макросы запрещены.
+        for name in ("старый.doc", "макросы.xlsm", "картинка.png"):
+            result = execute("read_document", {"path": str(root / name)})
+            assert "error" in result, (name, result)
+
+        # 2. Без подтверждения файл не создаётся.
+        policy.set_confirm_hook(lambda payload: {"action": "reject"})
+        result = execute(
+            "write_document", {"path": str(root / "отчёт.docx"), "content": ["привет"]}
+        )
+        assert result.get("cancelled") is True, result
+        assert not (root / "отчёт.docx").exists(), "файл создан без подтверждения"
+
+        # 3. С подтверждением: файл или честная ошибка про пакет.
+        policy.set_confirm_hook(approve)
+        result = execute(
+            "write_document", {"path": str(root / "отчёт.docx"), "content": ["привет", "пока"]}
+        )
+        if "error" in result:
+            assert "python-docx" in result["error"], result
+            note = "пакет не установлен, отказ понятен"
+        else:
+            assert (root / "отчёт.docx").exists(), result
+            note = "файл создан"
+
+        # 4. Существующий файл не трогаем: пишем копию.
+        result = execute(
+            "write_document",
+            {"path": str(root / "существующий.docx"), "content": ["правка"]},
+        )
+        if "error" not in result:
+            assert result.get("copy_of"), result
+            assert (root / "существующий-omega-").exists() is False, result
+            copies = list(root.glob("существующий-omega-*.docx"))
+            assert copies, result
+            assert (root / "существующий.docx").read_bytes() == b"PK", "оригинал испорчен"
+
+        # 5. OCR: не картинка — понятная ошибка, без подтверждения не распознаём.
+        result = execute("read_image", {"path": str(root / "отчёт.docx")})
+        assert "error" in result, result
+        return f"форматы, подтверждение и копия проверены ({note})"
+    finally:
+        policy.set_confirm_hook(None)
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def test_agent_llm() -> str:
     import agent
 
@@ -570,6 +632,7 @@ def main() -> int:
     check("компьютер: файлы и секреты", test_computer_tools)
     check("память: секреты, подтверждение, удаление, лимиты", test_memory)
     check("напоминания: подтверждение, список, удаление", test_reminders)
+    check("документы и OCR: форматы, подтверждение, копия", test_documents_and_ocr)
     check("политика: границы доступа и подтверждения", test_policy_security)
 
     if "--with-llm" in sys.argv:

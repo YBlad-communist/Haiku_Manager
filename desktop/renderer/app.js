@@ -64,6 +64,7 @@ const els = {
   draftText: document.getElementById("draftText"),
   draftEdit: document.getElementById("draftEdit"),
   modalChips: document.getElementById("modalChips"),
+  modalPreview: document.getElementById("modalPreview"),
   chipChannel: document.getElementById("chipChannel"),
   chipToday: document.getElementById("chipToday"),
   modalError: document.getElementById("modalError"),
@@ -1245,6 +1246,13 @@ function openConfirm(event) {
   const canAlways = event.kind === "launch_app" && Boolean(event.always_path);
   els.alwaysRow.hidden = !canAlways;
   els.alwaysCheck.checked = false;
+  const previewName = String(event.image || "");
+  els.modalPreview.hidden = !previewName;
+  if (previewName) {
+    els.modalPreview.src = api(`/api/screenshot?name=${encodeURIComponent(previewName)}`);
+  } else {
+    els.modalPreview.removeAttribute("src");
+  }
   els.modalError.hidden = true;
   els.modalError.textContent = "";
   setModalBusy(false);

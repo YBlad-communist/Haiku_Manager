@@ -208,11 +208,13 @@ def confirm(
     question: str,
     details: str = "",
     always_path: str = "",
+    image: str = "",
 ) -> dict:
     """Спрашивает подтверждение и возвращает решение пользователя.
 
     kind — что именно подтверждаем, always_path — путь, который можно
-    разрешить навсегда (только для запуска приложений).
+    разрешить навсегда (только для запуска приложений),
+    image — имя файла превью в папке снимков.
     """
     text = question if not details else f"{question}\n\n{details}"
     payload = {
@@ -220,6 +222,7 @@ def confirm(
         "title": title,
         "text": text,
         "always_path": always_path,
+        "image": image,
     }
     hook = _CONFIRM_HOOK
     if hook is not None:

@@ -16,6 +16,8 @@ from .computer import COMPUTER_TOOLS, HANDLERS as COMPUTER_HANDLERS
 from .actions import ACTIONS_TOOLS, HANDLERS as ACTION_HANDLERS
 from .memory import MEMORY_TOOL, memory_propose
 from .reminders import REMINDER_TOOLS, HANDLERS as REMINDER_HANDLERS
+from .documents import DOCUMENT_TOOLS, HANDLERS as DOCUMENT_HANDLERS
+from .ocr import OCR_TOOLS, HANDLERS as OCR_HANDLERS
 
 
 ALL_TOOLS: list[dict] = [
@@ -196,7 +198,7 @@ ALL_TOOLS: list[dict] = [
             },
         },
     },
-] + COMPUTER_TOOLS + ACTIONS_TOOLS + [MEMORY_TOOL] + REMINDER_TOOLS
+] + COMPUTER_TOOLS + ACTIONS_TOOLS + [MEMORY_TOOL] + REMINDER_TOOLS + DOCUMENT_TOOLS + OCR_TOOLS
 
 
 SALES_TOOL_NAMES = frozenset(
@@ -238,6 +240,8 @@ HANDLERS: dict[str, Callable[..., dict]] = {
     **COMPUTER_HANDLERS,
     **ACTION_HANDLERS,
     **REMINDER_HANDLERS,
+    **DOCUMENT_HANDLERS,
+    **OCR_HANDLERS,
 }
 
 

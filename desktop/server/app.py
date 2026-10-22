@@ -31,7 +31,9 @@ WORKER_PATH = Path(__file__).with_name("worker.py")
 MAX_AUDIO_BYTES = 10 * 1024 * 1024
 MAX_AUDIO_SECONDS = 60.0
 VOICE_LANGUAGES = ("ru", "en", "auto")
-SCREENSHOT_NAME_RE = re.compile(r"^shot-[0-9]{8}-[0-9]{6}\.png$")
+SCREENSHOT_NAME_RE = re.compile(
+    r"^(?:shot-[0-9]{8}-[0-9]{6}|ocr-[0-9a-f]{12})\.png$"
+)
 _whisper_model = None
 _whisper_lock = threading.Lock()
 

@@ -115,6 +115,7 @@ def ui_policy_confirm(payload: dict) -> dict:
             "title": str(payload.get("title") or "Подтвердить действие?"),
             "text": str(payload.get("text") or ""),
             "always_path": str(payload.get("always_path") or ""),
+            "image": str(payload.get("image") or ""),
             "channel": "",
             "today": 0,
             "limit": 0,
