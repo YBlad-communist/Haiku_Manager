@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld("omega", {
   getSettings: () => ipcRenderer.invoke("omega:get-settings"),
   saveSettings: (patch) => ipcRenderer.invoke("omega:save-settings", patch),
   getPromptInfo: () => ipcRenderer.invoke("omega:prompt-info"),
+  readClipboard: () => ipcRenderer.invoke("omega:clipboard-read"),
   onFocusInput: (callback) => {
     const handler = () => callback();
     ipcRenderer.on("focus-input", handler);

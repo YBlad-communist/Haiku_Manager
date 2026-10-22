@@ -35,6 +35,8 @@ const state = {
   voiceTimer: null,
   voiceStartedAt: 0,
   voiceAbort: null,
+  voices: [],
+  speaking: false,
 };
 
 let currentCard = null;
@@ -49,6 +51,8 @@ const els = {
   composer: document.getElementById("composer"),
   send: document.getElementById("send"),
   mic: document.getElementById("mic"),
+  clipboardBtn: document.getElementById("clipboardBtn"),
+  speakStop: document.getElementById("speakStop"),
   newTask: document.getElementById("newTask"),
   recent: document.getElementById("recent"),
   budgetValue: document.getElementById("budgetValue"),
@@ -82,6 +86,10 @@ const els = {
   modelSelect: document.getElementById("modelSelect"),
   modelNote: document.getElementById("modelNote"),
   themeSelect: document.getElementById("themeSelect"),
+  speechToggle: document.getElementById("speechToggle"),
+  speechVoice: document.getElementById("speechVoice"),
+  speechRate: document.getElementById("speechRate"),
+  speechVolume: document.getElementById("speechVolume"),
   memoryToggle: document.getElementById("memoryToggle"),
   memoryList: document.getElementById("memoryList"),
   memoryEmpty: document.getElementById("memoryEmpty"),
@@ -106,6 +114,8 @@ const els = {
 };
 
 const PROMPT_LIMIT = 4000;
+const SPEECH_MAX_CHARS = 700;
+const CLIPBOARD_MAX_CHARS = 20000;
 const VOICE_MAX_MS = 60_000;
 const VOICE_MIN_BYTES = 800;
 const VOICE_MIME_TYPES = [
@@ -676,6 +686,7 @@ function finishCard(event) {
   );
   if (reason === "done" || reason === "max_steps") {
     renderMarkdown(currentCard.refs.answer, answer);
+    speakAnswer(answer);
   } else {
     currentCard.refs.answer.textContent = answer;
   }
@@ -783,6 +794,139 @@ function parseBlock(block) {
 }
 
 const MEMORY_COMMAND_RE = /^\s*запомни[,:\s]+(.+)$/i;
+const CLIPBOARD_COMMAND_RE = /^\s*(?:возьми|вставь|взять)\s+из\s+буфера\s*!?\s*$/i;
+
+// Текст для озвучки: без кода, таблиц и врезок, длинное — по главному.
+function speechText(markdown) {
+  const lines = String(markdown || "").split("\n");
+  const kept = [];
+  let inCode = false;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("```")) {
+      inCode = !inCode;
+      continue;
+    }
+    if (inCode) continue;
+    if (!trimmed) continue;
+    if (trimmed.startsWith("|")) continue;
+    if (trimmed.startsWith(">")) continue;
+    if (/^#{1,6}\s/.test(trimmed)) {
+      kept.push(trimmed.replace(/^#{1,6}\s*/, ""));
+      continue;
+    }
+    kept.push(trimmed.replace(/^[-*]\s+/, "").replace(/^\d+\.\s+/, ""));
+  }
+  let text = kept.join(" ").replace(/\s+/g, " ").trim();
+  if (text.length > SPEECH_MAX_CHARS) {
+    const cut = text.slice(0, SPEECH_MAX_CHARS);
+    const stop = Math.max(
+      cut.lastIndexOf(". "),
+      cut.lastIndexOf("! "),
+      cut.lastIndexOf("? "),
+      cut.lastIndexOf("."),
+    );
+    text = stop > 120 ? `${cut.slice(0, stop + 1).trim()}…` : `${cut.trim()}…`;
+  }
+  return text;
+}
+
+function loadVoices() {
+  if (!window.speechSynthesis) {
+    return [];
+  }
+  const all = window.speechSynthesis.getVoices() || [];
+  state.voices = all.filter((voice) => /^ru/i.test(voice.lang || ""));
+  return state.voices;
+}
+
+function renderVoiceOptions() {
+  const current = state.settings?.speech_voice || "";
+  els.speechVoice.replaceChildren();
+  const fallback = document.createElement("option");
+  fallback.value = "";
+  fallback.textContent = "Голос по умолчанию";
+  els.speechVoice.append(fallback);
+  for (const voice of state.voices) {
+    const option = document.createElement("option");
+    option.value = voice.name;
+    option.textContent = `${voice.name} (${voice.lang})`;
+    els.speechVoice.append(option);
+  }
+  els.speechVoice.value = current;
+  if (els.speechVoice.value !== current) {
+    els.speechVoice.value = "";
+  }
+}
+
+function stopSpeaking() {
+  if (window.speechSynthesis) {
+    window.speechSynthesis.cancel();
+  }
+  state.speaking = false;
+  els.speakStop.hidden = true;
+}
+
+function speakAnswer(markdown) {
+  if (!state.settings || !state.settings.speech_enabled) {
+    return;
+  }
+  if (!window.speechSynthesis) {
+    showToast("В этом окне нет синтеза речи.");
+    return;
+  }
+  const text = speechText(markdown);
+  if (!text) {
+    return;
+  }
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(text);
+  const wanted = state.settings.speech_voice || "";
+  const voice = state.voices.find((item) => item.name === wanted);
+  if (voice) {
+    utterance.voice = voice;
+    utterance.lang = voice.lang;
+  } else {
+    utterance.lang = "ru-RU";
+  }
+  const rate = Number(state.settings.speech_rate);
+  const volume = Number(state.settings.speech_volume);
+  utterance.rate = Number.isFinite(rate) && rate > 0 ? rate : 1;
+  utterance.volume = Number.isFinite(volume) ? Math.max(0, Math.min(1, volume)) : 1;
+  const finish = () => {
+    state.speaking = false;
+    els.speakStop.hidden = true;
+  };
+  utterance.onend = finish;
+  utterance.onerror = finish;
+  state.speaking = true;
+  els.speakStop.hidden = false;
+  window.speechSynthesis.speak(utterance);
+}
+
+async function takeFromClipboard() {
+  try {
+    const data = await window.omega.readClipboard();
+    if (!data) {
+      showToast("Не удалось прочитать буфер обмена.");
+      return;
+    }
+    const text = String(data.text || "").trim();
+    if (!text) {
+      showToast("В буфере обмена пусто.");
+      return;
+    }
+    const preview = text.slice(0, 400);
+    if (!window.confirm(`Вставить из буфера?\n\n${preview}${text.length > 400 ? "…" : ""}`)) {
+      return;
+    }
+    els.input.value = text.slice(0, CLIPBOARD_MAX_CHARS);
+    els.input.focus();
+    showToast("Текст из буфера в поле ввода. Проверь и отправляй.");
+  } catch (error) {
+    showToast(error.message || "Не удалось прочитать буфер обмена.");
+  }
+}
 
 async function proposeMemory(text) {
   if (state.settings && state.settings.memory_enabled === false) {
@@ -817,6 +961,13 @@ async function submitTask() {
     els.input.value = "";
     addUserMessage(task);
     await proposeMemory(memoryMatch[1].trim());
+    return;
+  }
+
+  if (CLIPBOARD_COMMAND_RE.test(task)) {
+    els.input.value = "";
+    addUserMessage(task);
+    await takeFromClipboard();
     return;
   }
 
@@ -1861,6 +2012,16 @@ function applySettingsToUi() {
   const memoryEnabled = state.settings.memory_enabled !== false;
   els.memoryToggle.setAttribute("aria-checked", String(memoryEnabled));
   els.memoryToggle.classList.toggle("on", memoryEnabled);
+  const speechEnabled = Boolean(state.settings.speech_enabled);
+  els.speechToggle.setAttribute("aria-checked", String(speechEnabled));
+  els.speechToggle.classList.toggle("on", speechEnabled);
+  if (document.activeElement !== els.speechRate) {
+    els.speechRate.value = String(state.settings.speech_rate ?? 1);
+  }
+  if (document.activeElement !== els.speechVolume) {
+    els.speechVolume.value = String(state.settings.speech_volume ?? 1);
+  }
+  renderVoiceOptions();
   applyTheme(theme);
   if (document.activeElement !== els.userPrompt) {
     els.userPrompt.value = state.settings.user_prompt || "";
@@ -2041,6 +2202,59 @@ async function exportMemory() {
     showToast("Файл памяти сохранён в загрузки.");
   } catch (error) {
     showToast(error.message || "Не удалось выгрузить память.");
+  }
+}
+
+async function toggleSpeechEnabled() {
+  if (!state.settings || state.settingsBusy) {
+    return;
+  }
+  state.settingsBusy = true;
+  els.speechToggle.disabled = true;
+  const desired = !state.settings.speech_enabled;
+  const ok = await saveSettingsPatch({ speech_enabled: desired });
+  els.speechToggle.disabled = false;
+  state.settingsBusy = false;
+  if (ok) {
+    if (!desired) {
+      stopSpeaking();
+    }
+    showToast(desired ? "Озвучка включена." : "Озвучка выключена.");
+  } else {
+    applySettingsToUi();
+  }
+}
+
+async function saveSpeechVoice() {
+  if (!state.settings || state.settingsBusy) {
+    return;
+  }
+  const value = els.speechVoice.value || "";
+  if (value === (state.settings.speech_voice || "")) {
+    return;
+  }
+  state.settingsBusy = true;
+  const ok = await saveSettingsPatch({ speech_voice: value });
+  state.settingsBusy = false;
+  if (!ok) {
+    applySettingsToUi();
+  }
+}
+
+async function saveSpeechRange() {
+  if (!state.settings || state.settingsBusy) {
+    return;
+  }
+  const rate = Number(els.speechRate.value);
+  const volume = Number(els.speechVolume.value);
+  state.settingsBusy = true;
+  const ok = await saveSettingsPatch({
+    speech_rate: Number.isFinite(rate) ? rate : 1,
+    speech_volume: Number.isFinite(volume) ? volume : 1,
+  });
+  state.settingsBusy = false;
+  if (!ok) {
+    applySettingsToUi();
   }
 }
 
@@ -2441,6 +2655,12 @@ function bindEvents() {
   els.budgetInput.addEventListener("blur", saveBudget);
   els.voiceLanguage.addEventListener("change", saveVoiceLanguage);
   els.salesToggle.addEventListener("click", toggleSalesModule);
+  els.speechToggle.addEventListener("click", toggleSpeechEnabled);
+  els.speechVoice.addEventListener("change", saveSpeechVoice);
+  els.speechRate.addEventListener("change", saveSpeechRange);
+  els.speechVolume.addEventListener("change", saveSpeechRange);
+  els.speakStop.addEventListener("click", stopSpeaking);
+  els.clipboardBtn.addEventListener("click", takeFromClipboard);
   els.memoryToggle.addEventListener("click", toggleMemoryEnabled);
   els.memoryClear.addEventListener("click", clearMemory);
   els.memoryExport.addEventListener("click", exportMemory);
@@ -2509,6 +2729,9 @@ function bindEvents() {
     if (document.hidden && !els.voice.hidden) {
       closeVoice();
     }
+    if (document.hidden) {
+      stopSpeaking();
+    }
   });
 
   window.omega.onFocusInput(() => {
@@ -2524,6 +2747,13 @@ function bindEvents() {
 
 async function init() {
   bindEvents();
+  if (window.speechSynthesis) {
+    loadVoices();
+    window.speechSynthesis.addEventListener("voiceschanged", () => {
+      loadVoices();
+      renderVoiceOptions();
+    });
+  }
   try {
     const session = await window.omega.session();
     if (!session || !session.apiBase || !session.token) {

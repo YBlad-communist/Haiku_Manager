@@ -43,6 +43,12 @@
             <path d="M12 18v3"></path>
           </svg>
         </button>
+        <button type="button" class="ci icon-btn" id="clipboardBtn" aria-label="Взять текст из буфера обмена" title="Взять текст из буфера обмена">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M9 4h6a1 1 0 0 1 1 1v1h1a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h1V5a1 1 0 0 1 1-1Z"></path>
+            <path d="M9 4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1H9V4Z"></path>
+          </svg>
+        </button>
         <button type="submit" class="bt icon-btn send-btn" id="send" aria-label="Отправить">
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M5 12h14"></path>
@@ -144,6 +150,37 @@
           <button type="button" class="switch ci" id="salesToggle" role="switch" aria-checked="false" aria-label="Модуль продаж">
             <span class="switch-knob"></span>
           </button>
+        </section>
+
+        <section class="setting">
+          <div class="setting-text">
+            <h3>Озвучка ответов</h3>
+            <p>Читает вслух голосами Windows, без интернета. Код и таблицы не читает.</p>
+          </div>
+          <button type="button" class="switch ci" id="speechToggle" role="switch" aria-checked="false" aria-label="Озвучивать ответы">
+            <span class="switch-knob"></span>
+          </button>
+        </section>
+
+        <section class="setting">
+          <div class="setting-text">
+            <h3>Голос</h3>
+            <p>Голос из списка Windows. Пусто — голос по умолчанию.</p>
+          </div>
+          <select class="ci voice-language" id="speechVoice" aria-label="Голос озвучки">
+            <option value="">Голос по умолчанию</option>
+          </select>
+        </section>
+
+        <section class="setting">
+          <div class="setting-text">
+            <h3>Скорость и громкость</h3>
+            <p>Скорость: от 0,5 до 2. Громкость: от 0 до 1.</p>
+          </div>
+          <div class="speech-tools">
+            <input class="ci speech-range" id="speechRate" type="range" min="0.5" max="2" step="0.1" value="1" aria-label="Скорость озвучки">
+            <input class="ci speech-range" id="speechVolume" type="range" min="0" max="1" step="0.1" value="1" aria-label="Громкость озвучки">
+          </div>
         </section>
 
         <section class="setting">
@@ -268,6 +305,8 @@
   </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <button type="button" class="ci btn speak-stop" id="speakStop" hidden>Остановить озвучку</button>
 
   <template id="assistantTpl">
     <article class="assistant cl">

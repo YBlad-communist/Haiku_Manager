@@ -58,6 +58,10 @@ const DEFAULTS = {
   theme: "light",
   launch_without_confirm: false,
   allowed_apps: [],
+  speech_enabled: false,
+  speech_voice: "",
+  speech_rate: 1,
+  speech_volume: 1,
 };
 
 function settingsPath(projectRoot) {
@@ -131,6 +135,20 @@ function sanitizeSettings(value, base = DEFAULTS) {
     typeof source.launch_without_confirm === "boolean"
       ? source.launch_without_confirm
       : Boolean(base.launch_without_confirm);
+  const speechEnabled =
+    typeof source.speech_enabled === "boolean"
+      ? source.speech_enabled
+      : Boolean(base.speech_enabled);
+  const speechVoice =
+    typeof source.speech_voice === "string" ? source.speech_voice.slice(0, 200) : "";
+  const speechRate = Math.min(
+    2,
+    Math.max(0.5, Math.round(Number(source.speech_rate) * 100) / 100 || 1),
+  );
+  const speechVolume = Math.min(
+    1,
+    Math.max(0, Math.round(Number(source.speech_volume) * 100) / 100),
+  );
   const allowedApps = [];
   const sourceApps = Array.isArray(source.allowed_apps)
     ? source.allowed_apps
@@ -161,6 +179,10 @@ function sanitizeSettings(value, base = DEFAULTS) {
     theme,
     launch_without_confirm: launchWithoutConfirm,
     allowed_apps: allowedApps,
+    speech_enabled: speechEnabled,
+    speech_voice: speechVoice,
+    speech_rate: speechRate,
+    speech_volume: Number.isFinite(speechVolume) ? speechVolume : 1,
   };
 }
 

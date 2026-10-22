@@ -1057,6 +1057,36 @@ textarea.draft {
   margin-top: 4px;
 }
 
+.speech-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 0 0 190px;
+  width: 190px;
+}
+
+.speech-range {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.speak-stop {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 30;
+  padding: 10px 16px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--text);
+  color: #fff;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 8px 24px rgba(43, 42, 61, .28);
+}
+
 .allowed-app {
   display: flex;
   align-items: center;

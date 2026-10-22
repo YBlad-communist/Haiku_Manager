@@ -4,6 +4,7 @@
 const {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   globalShortcut,
   ipcMain,
@@ -567,12 +568,25 @@ function registerIpc() {
       "theme",
       "launch_without_confirm",
       "allowed_apps",
+      "speech_enabled",
+      "speech_voice",
+      "speech_rate",
+      "speech_volume",
     ]) {
       if (Object.prototype.hasOwnProperty.call(patch, key)) {
         allowed[key] = patch[key];
       }
     }
     return updateSettings(allowed);
+  });
+
+  ipcMain.handle("omega:clipboard-read", (event) => {
+    // Буфер читают только по прямому запросу пользователя, без фонового слежения.
+    if (!mainWindow || event.sender !== mainWindow.webContents) {
+      return null;
+    }
+    const text = clipboard.readText() || "";
+    return { text: text.slice(0, 20000), length: text.length };
   });
 
   ipcMain.handle("omega:prompt-info", (event) => {
