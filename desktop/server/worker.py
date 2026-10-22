@@ -29,6 +29,7 @@ for stream in (EVENT_STREAM, sys.stderr):
 import agent  # noqa: E402
 import config  # noqa: E402
 import llm  # noqa: E402
+import policy  # noqa: E402
 import safety  # noqa: E402
 import tools  # noqa: E402
 from tools import messages  # noqa: E402
@@ -104,6 +105,24 @@ def ask_confirm(
 
 
 safety.ask_confirm = ask_confirm
+
+
+def ui_policy_confirm(payload: dict) -> dict:
+    """Диалог подтверждения для действий политики: удаление, запуск и прочее."""
+    return request_confirmation(
+        {
+            "kind": str(payload.get("kind") or "generic"),
+            "title": str(payload.get("title") or "Подтвердить действие?"),
+            "text": str(payload.get("text") or ""),
+            "always_path": str(payload.get("always_path") or ""),
+            "channel": "",
+            "today": 0,
+            "limit": 0,
+        }
+    )
+
+
+policy.set_confirm_hook(ui_policy_confirm)
 
 
 _ORIGINAL_SEND = messages.send_message
@@ -199,6 +218,15 @@ def ui_execute(name: str, arguments: dict) -> dict:
         agent._summary(result) if isinstance(result, dict) else _short(str(result), 300)
     )
     emit({"type": "tool_result", "name": name, "ok": ok, "summary": summary})
+    if name == "screenshot" and isinstance(result, dict) and result.get("file"):
+        emit(
+            {
+                "type": "screenshot",
+                "file": str(result.get("file")),
+                "path": str(result.get("path") or ""),
+                "size_text": str(result.get("size_text") or ""),
+            }
+        )
     return result
 
 

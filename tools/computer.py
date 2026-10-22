@@ -3,7 +3,7 @@ import re
 import subprocess
 from pathlib import Path
 
-import safety
+import policy
 
 
 MAX_LIST_ENTRIES = 200
@@ -147,10 +147,39 @@ COMPUTER_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "delete_files",
+            "description": (
+                "Удалить файлы или папки: они уходят в корзину Windows, "
+                "их можно восстановить. "
+                "Перед удалением пользователь подтверждает действие в окне: "
+                "в списке видно точные пути, количество и размер. "
+                "Системные папки и секреты удалить нельзя."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "paths": {
+                        "type": "array",
+                        "description": (
+                            "Список абсолютных путей к файлам или папкам. "
+                            "Папка удаляется целиком, вместе с содержимым."
+                        ),
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                        "maxItems": 50,
+                    },
+                },
+                "required": ["paths"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "open_path",
             "description": (
                 "Открыть папку в проводнике Windows. "
-                "Перед открытием пользователь подтверждает действие."
+                "Действие выполняется без дополнительного вопроса."
             ),
             "parameters": {
                 "type": "object",
@@ -169,15 +198,20 @@ COMPUTER_TOOLS = [
         "function": {
             "name": "launch_app",
             "description": (
-                "Запустить программу. "
-                "Перед запуском пользователь подтверждает действие."
+                "Запустить установленное приложение: полный путь к exe или lnk "
+                "либо имя из меню «Пуск». Аргументы не поддерживаются. "
+                "Перед запуском пользователь подтверждает действие в окне "
+                "(кроме приложений, которым пользователь разрешил запуск)."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Абсолютный путь к exe или lnk",
+                        "description": (
+                            "Абсолютный путь к exe или lnk либо имя приложения "
+                            "из меню «Пуск»"
+                        ),
                     },
                 },
                 "required": ["path"],
@@ -187,19 +221,10 @@ COMPUTER_TOOLS = [
 ]
 
 
-def _clean_path(value) -> Path | None:
-    if not isinstance(value, str):
-        return None
-    raw = value.strip()
-    if not raw or not os.path.isabs(raw):
-        return None
-    return Path(os.path.realpath(os.path.abspath(os.path.expanduser(raw))))
-
-
 def _resolve_path(value) -> tuple[Path | None, str | None]:
-    path = _clean_path(value)
-    if path is None:
-        return None, "Нужен абсолютный путь."
+    path, error = policy.resolve_path(value)
+    if error:
+        return None, error
     return path, None
 
 
@@ -227,14 +252,16 @@ def _as_int(value, default: int, low: int, high: int) -> int:
     return max(low, min(high, number))
 
 
-def _confirm(title: str, question: str) -> bool:
-    return safety.ask_confirm(question, title=title)
+def _confirm(title: str, question: str, kind: str = "generic") -> bool:
+    return bool(policy.confirm(kind, title, question)["approved"])
 
 
 def list_files(path: str, limit: int = 100) -> dict:
     target, error = _resolve_path(path)
     if error:
         return {"error": error}
+    if policy.is_forbidden(target):
+        return {"error": "Эта папка закрыта для Омеги."}
     if not target.is_dir():
         return {"error": "Это не папка."}
     limit = _as_int(limit, 100, 1, MAX_LIST_ENTRIES)
@@ -278,6 +305,8 @@ def read_file(path: str, max_chars: int = 12000) -> dict:
     target, error = _resolve_path(path)
     if error:
         return {"error": error}
+    if policy.is_forbidden(target):
+        return {"error": "Этот файл закрыт для Омеги."}
     if not target.is_file():
         return {"error": "Это не файл."}
     if _is_secret(target):
@@ -317,6 +346,8 @@ def write_file(path: str, text: str, mode: str = "overwrite") -> dict:
     target, error = _resolve_path(path)
     if error:
         return {"error": error}
+    if policy.is_forbidden(target):
+        return {"error": "В эту папку Омега не пишет."}
     if _is_secret(target):
         return {"error": "Нельзя записывать файлы с секретами и ключами."}
     if target.exists() and target.is_dir():
@@ -331,7 +362,7 @@ def write_file(path: str, text: str, mode: str = "overwrite") -> dict:
         return {"error": "mode должен быть overwrite или append."}
     action = "дописать" if mode == "append" else "записать"
     question = f"{action.capitalize()} {len(text)} символов?\n{target}"
-    if not _confirm("Записать файл?", question):
+    if not _confirm("Записать файл?", question, kind="write_file"):
         return {"cancelled": True, "path": str(target)}
     try:
         if mode == "append":
@@ -350,14 +381,17 @@ def create_folder(path: str) -> dict:
     target, error = _resolve_path(path)
     if error:
         return {"error": error}
+    if policy.is_forbidden(target):
+        return {"error": "В эту папку Омега не пишет."}
     if _is_secret(target):
         return {"error": "Нельзя создавать папки для секретов."}
     if target.exists():
         return {"error": "Такая папка или файл уже есть."}
     if not target.parent.is_dir():
         return {"error": "Родительской папки нет. Сначала создай её."}
-    if not _confirm("Создать папку?", f"Создать папку?\n{target}"):
+    if not _confirm("Создать папку?", f"Создать папку?\n{target}", kind="create_folder"):
         return {"cancelled": True, "path": str(target)}
+
     try:
         target.mkdir()
     except OSError as exc:
@@ -382,8 +416,8 @@ def open_path(path: str) -> dict:
         return {"error": "open_path открывает только папки. Для файлов используй read_file."}
     if _is_secret(target):
         return {"error": "Эту папку открывать нельзя."}
-    if not _confirm("Открыть папку?", f"Открыть в проводнике?\n{target}"):
-        return {"cancelled": True, "path": str(target)}
+    if policy.is_forbidden(target):
+        return {"error": "Эта папка закрыта для Омеги."}
     try:
         _start(target)
     except OSError as exc:
@@ -391,18 +425,42 @@ def open_path(path: str) -> dict:
     return {"path": str(target), "opened": True}
 
 
+def _resolve_app(value: str) -> tuple[Path | None, str | None]:
+    """Находит приложение: полный путь или имя из меню «Пуск»."""
+    raw = str(value or "").strip()
+    if not raw:
+        return None, "Нужно имя или путь к приложению."
+    if os.path.isabs(os.path.expanduser(raw)):
+        target, error = policy.resolve_path(raw)
+        if error:
+            return None, error
+        if not target.exists():
+            return None, "Приложение не найдено."
+        if target.is_dir():
+            return None, "Это папка. Укажи файл приложения."
+        return target, None
+    return policy.find_app(raw)
+
+
 def launch_app(path: str) -> dict:
-    target = _clean_path(path)
-    if target is None:
-        return {"error": "Нужен абсолютный путь к приложению."}
+    target, error = _resolve_app(path)
+    if error:
+        return {"error": error}
     if target.suffix.lower() not in (".exe", ".lnk"):
         return {"error": "Запускать можно только exe или lnk."}
-    if not target.is_file():
-        return {"error": "Приложение не найдено."}
-    if _is_secret(target):
+    if policy.is_shell_binary(target):
+        return {"error": "Эту программу запускать нельзя."}
+    if _is_secret(target) or policy.is_protected(target):
         return {"error": "Этот файл заблокирован."}
-    if not _confirm("Запустить приложение?", f"Запустить приложение?\n{target}"):
-        return {"cancelled": True, "path": str(target)}
+    if not policy.launch_allowed(target):
+        answer = policy.confirm(
+            "launch_app",
+            "Запустить приложение?",
+            f"Запустить приложение?\n{target}",
+            always_path=str(target),
+        )
+        if not answer["approved"]:
+            return {"cancelled": True, "path": str(target)}
     try:
         _start(target)
     except OSError as exc:
@@ -410,11 +468,124 @@ def launch_app(path: str) -> dict:
     return {"path": str(target), "launched": True}
 
 
+def _delete_targets(values) -> tuple[list[Path], str | None]:
+    """Готовит список путей для удаления и проверяет все запреты."""
+    if not isinstance(values, list) or not values:
+        return [], "Нужен список путей."
+    if len(values) > 50:
+        return [], "Слишком много путей: максимум 50."
+    targets: list[Path] = []
+    for item in values:
+        raw_path, error = policy.resolve_raw(item)
+        if error:
+            return [], error
+        if raw_path.is_symlink():
+            return [], f"Симлинки удалять нельзя: {raw_path}"
+        target, error = policy.resolve_path(item)
+        if error:
+            return [], error
+        if policy.is_forbidden(target):
+            return [], f"Удалять из этой зоны нельзя: {target}"
+        if policy.is_protected(target):
+            return [], f"Это служебный файл Омеги, удалить его нельзя: {target}"
+        if not target.exists():
+            return [], f"Такого пути нет: {target}"
+        if target not in targets:
+            targets.append(target)
+    for target in targets:
+        for other in targets:
+            if other != target and policy.is_inside(other, target):
+                return [], f"В списке есть вложенный путь: {other}"
+    return targets, None
+
+
+def delete_files(paths: list[str]) -> dict:
+    """Удаляет файлы и папки через корзину Windows."""
+    targets, error = _delete_targets(paths)
+    if error:
+        return {"error": error}
+    if not targets:
+        return {"error": "Нужен список путей."}
+
+    total_size = sum(policy.folder_size(item) for item in targets)
+    listing = "\n".join(f"• {item}" for item in targets)
+    details = (
+        f"Объектов: {len(targets)}\n"
+        f"Размер: {policy.human_size(total_size)}\n\n"
+        f"{listing}"
+    )
+    # Снимок целей снимаем до вопроса: после подтверждения сверяем с ним.
+    was_dir = {item: item.is_dir() for item in targets}
+    answer = policy.confirm(
+        "delete_files",
+        "Удалить в корзину?",
+        "Удалить выбранные файлы и папки?",
+        details=details,
+    )
+    if not answer["approved"]:
+        return {"cancelled": True, "paths": [str(item) for item in targets]}
+
+    # После подтверждения проверяем, что цели те же: подменить путь нельзя.
+    for item in targets:
+        raw_now, _raw_error = policy.resolve_raw(item)
+        if raw_now.is_symlink():
+            return {
+                "error": (
+                    "Пока ты смотрел окно, путь заменили ссылкой. "
+                    "Ничего не удалено, проверь список и повтори."
+                )
+            }
+        current = Path(os.path.realpath(str(item)))
+        if not current.exists() or current.is_symlink():
+            return {
+                "error": (
+                    "Пока ты смотрел окно, путь изменился. "
+                    "Ничего не удалено, проверь список и повтори."
+                )
+            }
+        if current.is_dir() != was_dir[item]:
+            return {
+                "error": (
+                    "Пока ты смотрел окно, объект сменил тип. "
+                    "Ничего не удалено, проверь список и повтори."
+                )
+            }
+        if policy.is_forbidden(current) or policy.is_protected(current):
+            return {
+                "error": (
+                    "Пока ты смотрел окно, путь попал в запрещённую зону. "
+                    "Ничего не удалено."
+                )
+            }
+
+    deleted: list[str] = []
+    failed: list[str] = []
+    for item in targets:
+        ok, message = policy.send_to_recycle(item)
+        if ok and not item.exists():
+            deleted.append(str(item))
+        else:
+            failed.append(f"{item}: {message or 'не удалось переместить в корзину'}")
+
+    result: dict = {
+        "deleted": deleted,
+        "count": len(deleted),
+        "size": total_size,
+        "recycle_bin": True,
+    }
+    if failed:
+        result["failed"] = failed
+    if not deleted:
+        result["error"] = "Ничего не удалилось: " + "; ".join(failed)
+    return result
+
+
 HANDLERS = {
     "list_files": list_files,
     "read_file": read_file,
     "write_file": write_file,
     "create_folder": create_folder,
+    "delete_files": delete_files,
     "open_path": open_path,
     "launch_app": launch_app,
 }

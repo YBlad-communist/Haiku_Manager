@@ -13,6 +13,7 @@ from .save_to_table import save_to_table
 from .twogis import search_companies_2gis
 from .messages import draft_message, send_message
 from .computer import COMPUTER_TOOLS, HANDLERS as COMPUTER_HANDLERS
+from .actions import ACTIONS_TOOLS, HANDLERS as ACTION_HANDLERS
 
 
 ALL_TOOLS: list[dict] = [
@@ -193,7 +194,7 @@ ALL_TOOLS: list[dict] = [
             },
         },
     },
-] + COMPUTER_TOOLS
+] + COMPUTER_TOOLS + ACTIONS_TOOLS
 
 
 SALES_TOOL_NAMES = frozenset(
@@ -224,6 +225,7 @@ HANDLERS: dict[str, Callable[..., dict]] = {
     "draft_message": draft_message,
     "send_message": send_message,
     **COMPUTER_HANDLERS,
+    **ACTION_HANDLERS,
 }
 
 

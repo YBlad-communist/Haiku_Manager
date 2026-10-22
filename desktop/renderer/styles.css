@@ -987,6 +987,88 @@ textarea.draft {
   font-weight: 700;
 }
 
+.allowed-apps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.allowed-app {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  border: 1px solid rgba(91, 88, 115, .16);
+  border-radius: 12px;
+  background: rgba(91, 88, 115, .06);
+}
+
+.allowed-app-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  direction: rtl;
+  text-align: left;
+}
+
+.allowed-app-remove {
+  flex: 0 0 auto;
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.always-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 14px;
+  font-size: 13px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.always-row input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.media {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.media:empty {
+  display: none;
+}
+
+.shot {
+  margin: 0;
+  border: 1px solid rgba(91, 88, 115, .16);
+  border-radius: 14px;
+  overflow: hidden;
+  background: rgba(91, 88, 115, .06);
+}
+
+.shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.shot figcaption {
+  padding: 8px 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .hotkey-input {
   flex: 0 0 190px;
   width: 190px;

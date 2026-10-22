@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>Омега (Ω)</title>
   <link rel="stylesheet" href="nunito.css">
   <link rel="stylesheet" href="styles.css">
@@ -63,6 +63,10 @@
         <span class="chip ci" id="chipChannel"></span>
         <span class="chip ci" id="chipToday"></span>
       </div>
+      <label class="always-row" id="alwaysRow" hidden>
+        <input type="checkbox" id="alwaysCheck">
+        <span id="alwaysLabel">Разрешить это приложение всегда</span>
+      </label>
       <p class="modal-error" id="modalError" role="alert" hidden></p>
       <div class="modal-actions">
         <button type="button" class="ci btn" id="reject">Отклонить</button>
@@ -143,6 +147,25 @@
         </section>
 
         <section class="setting">
+          <div class="setting-text">
+            <h3>Запуск приложений</h3>
+            <p>По умолчанию Омега спрашивает перед запуском программы.</p>
+          </div>
+          <button type="button" class="switch ci" id="launchToggle" role="switch" aria-checked="false" aria-label="Запускать приложения без подтверждения">
+            <span class="switch-knob"></span>
+          </button>
+        </section>
+
+        <section class="setting setting-column">
+          <div class="setting-text">
+            <h3>Разрешённые приложения</h3>
+            <p>Эти программы Омега запускает без вопроса.</p>
+          </div>
+          <ul class="allowed-apps ci" id="allowedApps"></ul>
+          <p class="fineprint" id="allowedAppsEmpty">Список пуст: каждый запуск нужно подтвердить.</p>
+        </section>
+
+        <section class="setting setting-column">
           <div class="setting-text">
             <h3>Модель</h3>
             <p>Какая модель выполняет задачи. Haiku 5.5 — самая быстрая и дешёвая.</p>
@@ -232,6 +255,7 @@
         </div>
       </div>
       <div class="steps"></div>
+      <div class="media"></div>
       <p class="card-foot"></p>
       <div class="answer" hidden></div>
     </article>

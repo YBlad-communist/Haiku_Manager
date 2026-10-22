@@ -6,6 +6,7 @@ import asyncio
 import io
 import json
 import os
+import re
 import secrets
 import socket
 import sys
@@ -19,7 +20,7 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -30,6 +31,7 @@ WORKER_PATH = Path(__file__).with_name("worker.py")
 MAX_AUDIO_BYTES = 10 * 1024 * 1024
 MAX_AUDIO_SECONDS = 60.0
 VOICE_LANGUAGES = ("ru", "en", "auto")
+SCREENSHOT_NAME_RE = re.compile(r"^shot-[0-9]{8}-[0-9]{6}\.png$")
 _whisper_model = None
 _whisper_lock = threading.Lock()
 
@@ -53,7 +55,7 @@ CSP = (
     "script-src 'self'; "
     "style-src 'self'; "
     "font-src 'self'; "
-    "img-src 'self' data:; "
+    "img-src 'self' data: blob:; "
     "connect-src 'self'; "
     "object-src 'none'; "
     "base-uri 'none'; "
@@ -688,6 +690,26 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
     async def health():
         return {"ok": True, "version": "0.4"}
 
+    @app.get("/api/screenshot")
+    async def screenshot(name: str = ""):
+        """Отдаёт снимок экрана из data/screenshots."""
+        if not SCREENSHOT_NAME_RE.match(name or ""):
+            return JSONResponse({"error": "Нет такого снимка."}, status_code=404)
+        folder = PROJECT_ROOT / "data" / "screenshots"
+        target = folder / name
+        try:
+            resolved = target.resolve()
+            if not resolved.is_file() or resolved.parent != folder.resolve():
+                return JSONResponse({"error": "Нет такого снимка."}, status_code=404)
+            payload = resolved.read_bytes()
+        except OSError:
+            return JSONResponse({"error": "Нет такого снимка."}, status_code=404)
+        return Response(
+            content=payload,
+            media_type="image/png",
+            headers={"Content-Disposition": "inline"},
+        )
+
     @app.post("/api/transcribe")
     async def transcribe(request: Request):
         content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
@@ -932,7 +954,7 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
             return JSONResponse(
                 {"error": "Запрос подтверждения устарел."}, status_code=409
             )
-        if payload.action not in ("approve", "reject", "edit"):
+        if payload.action not in ("approve", "reject", "edit", "always"):
             return JSONResponse({"error": "Неизвестное действие."}, status_code=400)
         text = (payload.text or "")[:5000]
         with suppress(Exception):

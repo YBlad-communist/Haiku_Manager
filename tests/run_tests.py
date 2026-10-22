@@ -2,6 +2,8 @@
 # Запуск:  python tests\run_tests.py
 # С проверкой модели (одна дешёвая задача):  python tests\run_tests.py --with-llm
 
+import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -17,6 +19,7 @@ PROJECT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_DIR))
 
 import config  # noqa: E402
+import policy  # noqa: E402
 import safety  # noqa: E402
 from tools import (  # noqa: E402
     SALES_TOOL_NAMES,
@@ -67,9 +70,10 @@ def test_tools_schema() -> str:
     assert names == {
         "search_web", "fetch_page", "save_to_table", "search_companies_2gis",
         "draft_message", "send_message", "list_files", "read_file",
-        "write_file", "create_folder", "open_path", "launch_app",
+        "write_file", "create_folder", "delete_files", "open_path",
+        "launch_app", "download_file", "screenshot",
     }, names
-    return "12 инструментов"
+    return "15 инструментов"
 
 
 def test_sales_module_filter() -> str:
@@ -78,14 +82,14 @@ def test_sales_module_filter() -> str:
         config.current_sales_module = lambda: False
         names_off = {tool["function"]["name"] for tool in get_tools()}
         assert names_off.isdisjoint(SALES_TOOL_NAMES), names_off & SALES_TOOL_NAMES
-        assert len(names_off) == 9, len(names_off)
+        assert len(names_off) == 12, len(names_off)
         blocked = execute("search_companies_2gis", {"query": "тест", "city": "тест"})
         assert "Модуль продаж выключен" in blocked.get("error", ""), blocked
 
         config.current_sales_module = lambda: True
         names_on = {tool["function"]["name"] for tool in get_tools()}
         assert names_on == {tool["function"]["name"] for tool in TOOLS}
-        return "выключен: 9 инструментов, включён: 12"
+        return "выключен: 12 инструментов, включён: 15"
     finally:
         config.current_sales_module = original
 
@@ -276,6 +280,118 @@ def test_computer_tools() -> str:
         safety.ask_confirm = old_confirm
 
 
+def test_policy_security() -> str:
+    """Проверки границ: запрещённые зоны, «..», симлинки, подмена, секреты."""
+    temp_dir = Path(tempfile.mkdtemp(prefix="haiku_policy_"))
+    root = temp_dir / "work"
+    root.mkdir()
+    victim = root / "victim.txt"
+    victim.write_text("не тронуть", encoding="utf-8")
+    calls: list[dict] = []
+
+    def approve(payload: dict) -> dict:
+        calls.append(payload)
+        return {"action": "approve"}
+
+    policy.set_confirm_hook(approve)
+    try:
+        windows = Path(os.environ.get("SystemRoot", "C:/Windows"))
+
+        # 1. Удаление из запрещённой зоны запрещено.
+        forbidden = windows / "explorer.exe"
+        result = execute("delete_files", {"paths": [str(forbidden)]})
+        assert "error" in result, result
+        assert forbidden.exists(), "файл в запрещённой зоне пропал"
+
+        # 2. «..» не позволяет выйти в запрещённую зону.
+        traversal = str(windows / "System32" / ".." / "explorer.exe")
+        result = execute("delete_files", {"paths": [traversal]})
+        assert "error" in result, result
+        assert forbidden.exists(), "«..» обошёл запрет"
+
+        # 3. Симлинки удалять нельзя.
+        link = root / "link.txt"
+        link_created = False
+        try:
+            link.symlink_to(victim)
+            link_created = True
+        except (OSError, NotImplementedError):
+            link_created = False
+        if link_created:
+            result = execute("delete_files", {"paths": [str(link)]})
+            assert "error" in result, result
+            assert victim.exists(), "симлинк удалил чужой файл"
+
+        # 4. Служебные файлы Омеги не удаляются.
+        result = execute("delete_files", {"paths": [str(config.SETTINGS_FILE)]})
+        assert "error" in result, result
+        assert config.SETTINGS_FILE.exists(), "settings.json удалён"
+
+        # 5. Подмена пути после подтверждения отменяет удаление.
+        swapped = root / "swap.txt"
+        swapped.write_text("исходный", encoding="utf-8")
+        other = root / "other.txt"
+        other.write_text("не тронуть", encoding="utf-8")
+
+        def swap_hook(payload: dict) -> dict:
+            calls.append(payload)
+            swapped.unlink()
+            swapped.mkdir()
+            return {"action": "approve"}
+
+        policy.set_confirm_hook(swap_hook)
+        result = execute("delete_files", {"paths": [str(swapped)]})
+        assert "error" in result, result
+        assert other.exists(), "удалён не тот объект"
+        assert swapped.is_dir(), "подмена прошла"
+
+        # 6. Подтверждение показывает пути, количество и размер.
+        policy.set_confirm_hook(approve)
+        calls.clear()
+        listed = root / "listed.txt"
+        listed.write_text("данные", encoding="utf-8")
+        result = execute("delete_files", {"paths": [str(listed)]})
+        assert result.get("count") == 1, result
+        assert calls, "подтверждение не спросили"
+        payload = calls[-1]
+        assert payload["kind"] == "delete_files", payload
+        assert "Объектов: 1" in payload["text"], payload["text"]
+        assert str(listed) in payload["text"], payload["text"]
+        assert not listed.exists(), "файл остался после подтверждения"
+
+        # 7. Просмотр идёт без вопроса.
+        calls.clear()
+        result = execute("list_files", {"path": str(root)})
+        assert result.get("count", 0) >= 1, result
+        assert not calls, "просмотр спросил подтверждение"
+
+        # 8. Секреты не читаются.
+        env_file = root / ".env"
+        env_file.write_text("SECRET=value", encoding="utf-8")
+        result = execute("read_file", {"path": str(env_file)})
+        assert "error" in result, result
+
+        # 9. Командная оболочка не запускается, аргументы не принимаются.
+        shell = windows / "System32" / "cmd.exe"
+        result = execute("launch_app", {"path": str(shell)})
+        assert "error" in result, result
+        result = execute(
+            "launch_app", {"path": str(shell), "args": "/c calc"}
+        )
+        assert "error" in result, result
+
+        # 10. Скачивание и снимок экрана требуют подтверждения.
+        for kind in ("delete_files", "download_file", "screenshot", "launch_app"):
+            assert policy.needs_confirmation(kind), kind
+        for kind in ("list_files", "read_file", "open_path"):
+            assert not policy.needs_confirmation(kind), kind
+
+        return "зоны, «..», симлинки, подмена, секреты и запуск проверены"
+    finally:
+        policy.set_confirm_hook(None)
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def test_agent_llm() -> str:
     import agent
 
@@ -307,6 +423,7 @@ def main() -> int:
     check("search_web: разбор XML v2", test_yandex_xml_parser)
     check("сообщения (черновик и заглушка)", test_messages)
     check("компьютер: файлы и секреты", test_computer_tools)
+    check("политика: границы доступа и подтверждения", test_policy_security)
 
     if "--with-llm" in sys.argv:
         check("модель через агент", test_agent_llm)

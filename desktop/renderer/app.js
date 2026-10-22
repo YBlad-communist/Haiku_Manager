@@ -59,6 +59,8 @@ const els = {
   chipChannel: document.getElementById("chipChannel"),
   chipToday: document.getElementById("chipToday"),
   modalError: document.getElementById("modalError"),
+  alwaysRow: document.getElementById("alwaysRow"),
+  alwaysCheck: document.getElementById("alwaysCheck"),
   reject: document.getElementById("reject"),
   edit: document.getElementById("edit"),
   approve: document.getElementById("approve"),
@@ -77,6 +79,9 @@ const els = {
   modelSelect: document.getElementById("modelSelect"),
   modelNote: document.getElementById("modelNote"),
   themeSelect: document.getElementById("themeSelect"),
+  launchToggle: document.getElementById("launchToggle"),
+  allowedApps: document.getElementById("allowedApps"),
+  allowedAppsEmpty: document.getElementById("allowedAppsEmpty"),
   userPrompt: document.getElementById("userPrompt"),
   promptCounter: document.getElementById("promptCounter"),
   promptReset: document.getElementById("promptReset"),
@@ -112,8 +117,11 @@ const TOOL_LABELS = {
   read_file: "Читаю файл",
   write_file: "Записываю файл",
   create_folder: "Создаю папку",
+  delete_files: "Удаляю в корзину",
   open_path: "Открываю папку",
   launch_app: "Запускаю программу",
+  download_file: "Скачиваю файл",
+  screenshot: "Делаю снимок экрана",
 };
 
 const markdown = window.markdownit
@@ -447,6 +455,7 @@ function createAssistantCard(title = "Работаю над задачей") {
     stop: stopButton,
     remove: deleteButton,
     steps: node.querySelector(".steps"),
+    media: node.querySelector(".media"),
     foot: node.querySelector(".card-foot"),
     answer: node.querySelector(".answer"),
   };
@@ -562,12 +571,45 @@ function handleEvent(event) {
     openConfirm(event);
     return;
   }
+  if (event.type === "screenshot") {
+    showScreenshot(event);
+    return;
+  }
   if (event.type === "draft_edited") {
     showToast("Текст черновика изменён.");
     return;
   }
   if (event.type === "final") {
     finishCard(event);
+  }
+}
+
+async function showScreenshot(event) {
+  const name = String(event.file || "");
+  if (!name || !currentCard || !currentCard.refs.media) {
+    return;
+  }
+  try {
+    const response = await fetch(api(`/api/screenshot?name=${encodeURIComponent(name)}`), {
+      headers: authHeaders(),
+    });
+    if (!response.ok) {
+      return;
+    }
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const figure = document.createElement("figure");
+    figure.className = "shot";
+    const image = document.createElement("img");
+    image.src = objectUrl;
+    image.alt = "Снимок экрана";
+    const caption = document.createElement("figcaption");
+    caption.textContent = `Снимок экрана · ${name}`;
+    figure.append(image, caption);
+    currentCard.refs.media.append(figure);
+    scrollFeed();
+  } catch {
+    // Снимок не показался — задача продолжается.
   }
 }
 
@@ -925,6 +967,22 @@ async function deleteMessage(chatId, messageId) {
   }
 }
 
+function confirmSubtitle(event) {
+  const isSend = event.kind === "send_message";
+  if (isSend) {
+    return `Помощник хочет написать компании «${event.company || event.recipient || "без названия"}»`;
+  }
+  const subtitles = {
+    delete_files: "Помощник хочет удалить файлы или папки. Они уйдут в корзину.",
+    launch_app: "Помощник хочет запустить программу.",
+    download_file: "Помощник хочет скачать файл из интернета.",
+    screenshot: "Помощник хочет сделать снимок экрана.",
+    write_file: "Помощник хочет записать файл.",
+    create_folder: "Помощник хочет создать папку.",
+  };
+  return subtitles[event.kind] || "Помощник просит подтверждение действия.";
+}
+
 function openConfirm(event) {
   if (!els.voice.hidden) {
     closeVoice();
@@ -935,9 +993,7 @@ function openConfirm(event) {
 
   const isSend = event.kind === "send_message";
   els.modalTitle.textContent = event.title || "Подтвердить действие?";
-  els.modalSubtitle.textContent = isSend
-    ? `Помощник хочет написать компании «${event.company || event.recipient || "без названия"}»`
-    : "Помощник просит подтверждение действия.";
+  els.modalSubtitle.textContent = confirmSubtitle(event);
   els.draftText.textContent = String(event.text || "");
   els.draftText.hidden = false;
   els.draftEdit.value = String(event.text || "");
@@ -947,6 +1003,9 @@ function openConfirm(event) {
   els.chipToday.textContent = `Сегодня: ${event.today || 0} из ${event.limit || 0}`;
   els.edit.hidden = !isSend;
   els.approve.textContent = isSend ? "Отправить" : "Подтвердить";
+  const canAlways = event.kind === "launch_app" && Boolean(event.always_path);
+  els.alwaysRow.hidden = !canAlways;
+  els.alwaysCheck.checked = false;
   els.modalError.hidden = true;
   els.modalError.textContent = "";
   setModalBusy(false);
@@ -995,15 +1054,25 @@ async function answerConfirm(action) {
     }
   }
 
+  const always =
+    action === "approve" &&
+    !els.alwaysRow.hidden &&
+    els.alwaysCheck.checked &&
+    Boolean(event.always_path);
+  const finalAction = always ? "always" : action;
+
   setModalBusy(true);
   els.modalError.hidden = true;
   try {
     await apiJson("/api/confirm", {
       method: "POST",
-      body: JSON.stringify({ id: event.id, action, text }),
+      body: JSON.stringify({ id: event.id, action: finalAction, text }),
     });
     closeConfirm();
-    if (action === "edit") {
+    if (always) {
+      await rememberAllowedApp(event.always_path);
+      showToast("Приложение разрешено навсегда.");
+    } else if (action === "edit") {
       showToast("Текст изменён и подтверждён.");
     }
   } catch (error) {
@@ -1675,12 +1744,82 @@ function applySettingsToUi() {
   if (document.activeElement !== els.themeSelect) {
     els.themeSelect.value = theme;
   }
+  const launch = Boolean(state.settings.launch_without_confirm);
+  els.launchToggle.setAttribute("aria-checked", String(launch));
+  els.launchToggle.classList.toggle("on", launch);
+  renderAllowedApps();
   applyTheme(theme);
   if (document.activeElement !== els.userPrompt) {
     els.userPrompt.value = state.settings.user_prompt || "";
   }
   updatePromptCounter();
   applyModelNote(state.settings.model);
+}
+
+function renderAllowedApps() {
+  const apps = Array.isArray(state.settings?.allowed_apps)
+    ? state.settings.allowed_apps
+    : [];
+  els.allowedApps.replaceChildren();
+  els.allowedAppsEmpty.hidden = apps.length > 0;
+  for (const item of apps) {
+    const row = document.createElement("li");
+    row.className = "allowed-app";
+    const name = document.createElement("span");
+    name.className = "allowed-app-name";
+    name.textContent = item;
+    name.title = item;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "ci btn allowed-app-remove";
+    remove.textContent = "Убрать";
+    remove.addEventListener("click", () => removeAllowedApp(item));
+    row.append(name, remove);
+    els.allowedApps.append(row);
+  }
+}
+
+async function rememberAllowedApp(path) {
+  const apps = Array.isArray(state.settings?.allowed_apps)
+    ? [...state.settings.allowed_apps]
+    : [];
+  if (!apps.includes(path)) {
+    apps.push(path);
+  }
+  await saveSettingsPatch({ allowed_apps: apps });
+}
+
+async function removeAllowedApp(path) {
+  const apps = Array.isArray(state.settings?.allowed_apps)
+    ? state.settings.allowed_apps
+    : [];
+  const ok = await saveSettingsPatch({
+    allowed_apps: apps.filter((item) => item !== path),
+  });
+  if (ok) {
+    showToast("Приложение убрано из разрешённых.");
+  }
+}
+
+async function toggleLaunchWithoutConfirm() {
+  if (!state.settings || state.settingsBusy) {
+    return;
+  }
+  state.settingsBusy = true;
+  els.launchToggle.disabled = true;
+  const desired = !state.settings.launch_without_confirm;
+  const ok = await saveSettingsPatch({ launch_without_confirm: desired });
+  els.launchToggle.disabled = false;
+  state.settingsBusy = false;
+  if (ok) {
+    showToast(
+      desired
+        ? "Запуск приложений без вопроса включён."
+        : "Запуск приложений без вопроса выключен.",
+    );
+  } else {
+    applySettingsToUi();
+  }
 }
 
 async function saveSettingsPatch(patch) {
@@ -2038,6 +2177,7 @@ function bindEvents() {
   els.budgetInput.addEventListener("blur", saveBudget);
   els.voiceLanguage.addEventListener("change", saveVoiceLanguage);
   els.salesToggle.addEventListener("click", toggleSalesModule);
+  els.launchToggle.addEventListener("click", toggleLaunchWithoutConfirm);
   els.modelSelect.addEventListener("change", saveModel);
   els.themeSelect.addEventListener("change", saveTheme);
   els.userPrompt.addEventListener("input", updatePromptCounter);

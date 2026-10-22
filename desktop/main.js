@@ -564,6 +564,8 @@ function registerIpc() {
       "model",
       "user_prompt",
       "theme",
+      "launch_without_confirm",
+      "allowed_apps",
     ]) {
       if (Object.prototype.hasOwnProperty.call(patch, key)) {
         allowed[key] = patch[key];

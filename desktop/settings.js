@@ -35,6 +35,16 @@ const MODELS = [
 ];
 const MODEL_IDS = new Set(MODELS.map((item) => item.id));
 const PROMPT_LIMIT = 4000;
+const MAX_ALLOWED_APPS = 100;
+
+// Старые списки разрешённых папок больше не нужны: Омега работает с любыми
+// папками, кроме запрещённых зон. Значения переносим в data/legacy_allowed.json.
+const LEGACY_ALLOWLIST_KEYS = [
+  "allowed_folders",
+  "allowed_paths",
+  "allowed_apps",
+  "allowlist",
+];
 
 const DEFAULTS = {
   hotkey: "CommandOrControl+Space",
@@ -45,6 +55,8 @@ const DEFAULTS = {
   model: "claude-haiku-5.5",
   user_prompt: "",
   theme: "light",
+  launch_without_confirm: false,
+  allowed_apps: [],
 };
 
 function settingsPath(projectRoot) {
@@ -110,6 +122,28 @@ function sanitizeSettings(value, base = DEFAULTS) {
       : base.theme === "dark"
         ? "dark"
         : "light";
+  const launchWithoutConfirm =
+    typeof source.launch_without_confirm === "boolean"
+      ? source.launch_without_confirm
+      : Boolean(base.launch_without_confirm);
+  const allowedApps = [];
+  const sourceApps = Array.isArray(source.allowed_apps)
+    ? source.allowed_apps
+    : Array.isArray(base.allowed_apps)
+      ? base.allowed_apps
+      : [];
+  for (const item of sourceApps) {
+    if (typeof item !== "string") {
+      continue;
+    }
+    const value = item.trim();
+    if (value && !allowedApps.includes(value)) {
+      allowedApps.push(value);
+    }
+    if (allowedApps.length >= MAX_ALLOWED_APPS) {
+      break;
+    }
+  }
   return {
     hotkey,
     autostart: Boolean(source.autostart),
@@ -119,7 +153,30 @@ function sanitizeSettings(value, base = DEFAULTS) {
     model,
     user_prompt: userPrompt,
     theme,
+    launch_without_confirm: launchWithoutConfirm,
+    allowed_apps: allowedApps,
   };
+}
+
+// Переносит старые списки разрешённых папок в отдельный файл.
+function migrateLegacyAllowlists(projectRoot, parsed) {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  const legacy = {};
+  for (const key of LEGACY_ALLOWLIST_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(parsed, key)) {
+      legacy[key] = parsed[key];
+      delete parsed[key];
+    }
+  }
+  if (!Object.keys(legacy).length) {
+    return null;
+  }
+  const file = path.join(projectRoot, "data", "legacy_allowed.json");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify(legacy, null, 2)}\n`, "utf8");
+  return legacy;
 }
 
 function loadSettings(projectRoot, legacyHotkey = "") {
@@ -138,9 +195,10 @@ function loadSettings(projectRoot, legacyHotkey = "") {
     }
   }
   const settings = sanitizeSettings(parsed || {}, defaults);
+  const legacy = migrateLegacyAllowlists(projectRoot, parsed);
   const hasLegacyPrompt =
     parsed && Object.prototype.hasOwnProperty.call(parsed, "system_prompt");
-  if (!parsed || hasLegacyPrompt) {
+  if (!parsed || hasLegacyPrompt || legacy) {
     try {
       saveSettings(projectRoot, settings);
     } catch (error) {
@@ -162,9 +220,11 @@ function saveSettings(projectRoot, settings) {
 
 module.exports = {
   DEFAULTS,
+  LEGACY_ALLOWLIST_KEYS,
   MODELS,
   PROMPT_LIMIT,
   loadSettings,
+  migrateLegacyAllowlists,
   readDefaultPrompt,
   saveSettings,
   sanitizeSettings,

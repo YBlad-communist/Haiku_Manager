@@ -372,11 +372,67 @@ def test_computer_tools() -> None:
             computer._start = old_start
 
 
+def test_settings_js() -> None:
+    """Настройки окна: миграция старых списков и новые ключи запуска."""
+    script = """
+const fs = require("fs");
+const path = require("path");
+const settings = require(process.argv[2]);
+const root = process.argv[3];
+
+const parsed = {
+  hotkey: "CommandOrControl+Space",
+  allowed_folders: ["C:/old"],
+  allowed_apps: ["C:/old.exe"],
+};
+const legacy = settings.migrateLegacyAllowlists(root, parsed);
+const saved = JSON.parse(
+  fs.readFileSync(path.join(root, "data", "legacy_allowed.json"), "utf8"),
+);
+const clean = settings.sanitizeSettings(parsed);
+const apps = settings.sanitizeSettings({
+  allowed_apps: ["C:/a.exe", "C:/a.exe", 5, " "],
+  launch_without_confirm: true,
+});
+const problems = [];
+if (!legacy || legacy.allowed_folders[0] !== "C:/old") problems.push("legacy");
+if (saved.allowed_apps[0] !== "C:/old.exe") problems.push("saved");
+if ("allowed_folders" in parsed) problems.push("clean");
+if (clean.allowed_apps.length !== 0) problems.push("clean-apps");
+if (apps.allowed_apps.length !== 1) problems.push("apps");
+if (apps.launch_without_confirm !== true) problems.push("toggle");
+console.log(problems.length ? problems.join(",") : "OK");
+"""
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp)
+        (root / "data").mkdir(parents=True, exist_ok=True)
+        script_file = root / "check.js"
+        script_file.write_text(script, encoding="utf-8")
+        try:
+            completed = subprocess.run(
+                ["node", str(script_file), str(ROOT / "desktop" / "settings.js"), str(root)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=60,
+            )
+        except FileNotFoundError:
+            check("настройки: миграция allowlist и запуск приложений", True, "пропущено: нет node")
+            return
+        check(
+            "настройки: миграция allowlist и запуск приложений",
+            completed.returncode == 0 and "OK" in (completed.stdout or ""),
+            (completed.stdout or completed.stderr or "").strip()[-200:],
+        )
+
+
 def main() -> int:
     print("Тесты сервера (голос — при наличии модели)\n")
     ok, detail = test_worker_dialog()
     check("диалог send_message: правка и отказ", ok, "" if ok else detail)
     test_computer_tools()
+    test_settings_js()
     server = Server()
     try:
         status, _, _ = server.request("GET", "/api/health")
@@ -467,6 +523,36 @@ def main() -> int:
 
         status, _, _ = server.request("GET", "/../config.py")
         check("выход за папку закрыт", status in (400, 403, 404), str(status))
+
+        shots_dir = ROOT / "data" / "screenshots"
+        shots_dir.mkdir(parents=True, exist_ok=True)
+        shot_name = "shot-20260101-000000.png"
+        shot_file = shots_dir / shot_name
+        shot_file.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 32)
+        try:
+            status, headers, body = server.request(
+                "GET", f"/api/screenshot?name={shot_name}", token=TOKEN
+            )
+            check(
+                "снимок экрана отдаётся",
+                status == 200
+                and body.startswith(b"\x89PNG")
+                and "image/png" in header_value(headers, "Content-Type"),
+                f"status={status}, type={header_value(headers, 'Content-Type')}",
+            )
+            status, _, _ = server.request(
+                "GET", "/api/screenshot?name=../config.py", token=TOKEN
+            )
+            check("снимок по чужому пути — 404", status == 404, str(status))
+            status, _, _ = server.request(
+                "GET", "/api/screenshot?name=secret.png", token=TOKEN
+            )
+            check("снимок с неверным именем — 404", status == 404, str(status))
+            status, _, _ = server.request("GET", f"/api/screenshot?name={shot_name}")
+            check("снимок без токена — 401", status == 401, str(status))
+        finally:
+            if shot_file.exists():
+                shot_file.unlink()
 
         status, _, _ = server.request("POST", "/api/task", token=TOKEN, body={"task": "x"})
         check("POST без Origin — 403", status == 403, str(status))
