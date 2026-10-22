@@ -20,6 +20,7 @@ const state = {
   promptInfo: null,
   memory: [],
   memoryEnabled: true,
+  reminders: [],
   editingMemoryId: null,
   voiceToken: 0,
   voiceRecording: false,
@@ -91,6 +92,8 @@ const els = {
   speechRate: document.getElementById("speechRate"),
   speechVolume: document.getElementById("speechVolume"),
   memoryToggle: document.getElementById("memoryToggle"),
+  reminderList: document.getElementById("reminderList"),
+  reminderEmpty: document.getElementById("reminderEmpty"),
   memoryList: document.getElementById("memoryList"),
   memoryEmpty: document.getElementById("memoryEmpty"),
   memoryExport: document.getElementById("memoryExport"),
@@ -2134,6 +2137,68 @@ function renderMemory() {
   }
 }
 
+function renderReminders() {
+  const items = Array.isArray(state.reminders) ? state.reminders : [];
+  els.reminderList.replaceChildren();
+  els.reminderEmpty.hidden = items.length > 0;
+  for (const item of items) {
+    const row = document.createElement("li");
+    row.className = "memory-item";
+    const text = document.createElement("p");
+    text.className = "memory-text";
+    text.textContent = item.text || "";
+    const date = document.createElement("span");
+    date.className = "memory-date";
+    date.textContent = formatReminderTime(item.at);
+    const actions = document.createElement("div");
+    actions.className = "memory-actions";
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "ci btn";
+    remove.textContent = "Удалить";
+    remove.addEventListener("click", () => deleteReminder(item.id));
+    actions.append(remove);
+    row.append(text, date, actions);
+    els.reminderList.append(row);
+  }
+}
+
+function formatReminderTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return String(value || "");
+  }
+  return date.toLocaleString("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+async function refreshReminders() {
+  try {
+    const data = await apiJson("/api/reminders");
+    state.reminders = Array.isArray(data.reminders) ? data.reminders : [];
+    renderReminders();
+  } catch {
+    // Напоминания недоступны — список останется пустым.
+  }
+}
+
+async function deleteReminder(id) {
+  if (!window.confirm("Удалить напоминание?")) {
+    return;
+  }
+  try {
+    await apiJson(`/api/reminders/${encodeURIComponent(id)}`, { method: "DELETE" });
+    await refreshReminders();
+    showToast("Напоминание удалено.");
+  } catch (error) {
+    showToast(error.message || "Не удалось удалить напоминание.");
+  }
+}
+
 async function refreshMemory() {
   try {
     const data = await apiJson("/api/memory");
@@ -2345,6 +2410,7 @@ async function openSettings() {
       applyModelNote(settings.model);
     }
     await refreshMemory();
+    await refreshReminders();
   } catch (error) {
     showToast(error.message || "Не удалось открыть настройки.");
     return;

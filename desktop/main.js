@@ -10,6 +10,7 @@ const {
   ipcMain,
   Menu,
   nativeImage,
+  Notification,
   session,
   shell,
   Tray,
@@ -471,6 +472,76 @@ function updateTrayMenu() {
   tray.setContextMenu(menu);
 }
 
+let reminderTimer = null;
+const firedReminders = new Set();
+
+async function apiCall(method, urlPath, body) {
+  if (!apiBase) {
+    return null;
+  }
+  try {
+    const response = await fetch(`${apiBase}${urlPath}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${TOKEN}`,
+        Origin: apiBase,
+        ...(body ? { "Content-Type": "application/json" } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (!response.ok) {
+      return null;
+    }
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+function showReminderNotification(item) {
+  if (!Notification.isSupported()) {
+    return;
+  }
+  const notification = new Notification({
+    title: "Омега",
+    body: String(item.text || "").slice(0, 240),
+  });
+  notification.on("click", () => showWindow(false));
+  notification.show();
+}
+
+async function checkReminders() {
+  const data = await apiCall("GET", "/api/reminders");
+  if (!data || !Array.isArray(data.reminders)) {
+    return;
+  }
+  const now = Date.now();
+  for (const item of data.reminders) {
+    if (firedReminders.has(item.id)) {
+      continue;
+    }
+    const when = Date.parse(item.at || "");
+    if (!Number.isFinite(when) || when > now) {
+      continue;
+    }
+    firedReminders.add(item.id);
+    showReminderNotification(item);
+    await apiCall("POST", `/api/reminders/${encodeURIComponent(item.id)}/done`);
+  }
+}
+
+function startReminderWatch() {
+  if (reminderTimer) {
+    clearInterval(reminderTimer);
+  }
+  reminderTimer = setInterval(() => {
+    checkReminders().catch(() => {});
+  }, 15000);
+  setTimeout(() => {
+    checkReminders().catch(() => {});
+  }, 5000);
+}
+
 function createTray() {
   const iconPath = path.join(__dirname, "assets", "tray-32.png");
   let image = nativeImage.createFromPath(iconPath);
@@ -707,6 +778,7 @@ if (!gotLock) {
       await waitForServer();
       createWindow();
       createTray();
+      startReminderWatch();
       if (!registerHotkey(SETTINGS.hotkey)) {
         console.warn(
           `Не удалось зарегистрировать горячую клавишу ${SETTINGS.hotkey}`,

@@ -21,6 +21,7 @@ sys.path.insert(0, str(PROJECT_DIR))
 import config  # noqa: E402
 import memory  # noqa: E402
 import policy  # noqa: E402
+import reminders  # noqa: E402
 import safety  # noqa: E402
 from tools import (  # noqa: E402
     SALES_TOOL_NAMES,
@@ -73,8 +74,9 @@ def test_tools_schema() -> str:
         "draft_message", "send_message", "list_files", "read_file",
         "write_file", "create_folder", "delete_files", "open_path",
         "launch_app", "download_file", "screenshot", "memory_propose",
+        "add_reminder", "list_reminders",
     }, names
-    return "16 инструментов"
+    return "18 инструментов"
 
 
 def test_sales_module_filter() -> str:
@@ -83,14 +85,14 @@ def test_sales_module_filter() -> str:
         config.current_sales_module = lambda: False
         names_off = {tool["function"]["name"] for tool in get_tools()}
         assert names_off.isdisjoint(SALES_TOOL_NAMES), names_off & SALES_TOOL_NAMES
-        assert len(names_off) == 13, len(names_off)
+        assert len(names_off) == 15, len(names_off)
         blocked = execute("search_companies_2gis", {"query": "тест", "city": "тест"})
         assert "Модуль продаж выключен" in blocked.get("error", ""), blocked
 
         config.current_sales_module = lambda: True
         names_on = {tool["function"]["name"] for tool in get_tools()}
         assert names_on == {tool["function"]["name"] for tool in TOOLS}
-        return "выключен: 13 инструментов, включён: 16"
+        return "выключен: 15 инструментов, включён: 18"
     finally:
         config.current_sales_module = original
 
@@ -482,6 +484,59 @@ def agent_prompt_has_memory(block: str) -> bool:
     return block[:40] in agent.get_full_prompt()
 
 
+def test_reminders() -> str:
+    """Напоминания: без подтверждения не создаются, удаляются с диска."""
+    old_env = os.environ.get("OMEGA_REMINDERS_FILE")
+    temp_dir = Path(tempfile.mkdtemp(prefix="haiku_reminders_"))
+    reminders_file = temp_dir / "reminders.json"
+    os.environ["OMEGA_REMINDERS_FILE"] = str(reminders_file)
+
+    def approve(payload: dict) -> dict:
+        return {"action": "approve"}
+
+    policy.set_confirm_hook(approve)
+    try:
+        # 1. Без «Да» напоминание не создаётся.
+        policy.set_confirm_hook(lambda payload: {"action": "reject"})
+        result = execute("add_reminder", {"text": "встать", "minutes": 10})
+        assert result.get("cancelled") is True, result
+        assert not reminders_file.exists(), "напоминание создалось без подтверждения"
+
+        # 2. С подтверждением — создаётся.
+        policy.set_confirm_hook(approve)
+        result = execute("add_reminder", {"text": "встать и позвонить", "minutes": 10})
+        assert result.get("saved") is True, result
+        items = reminders.pending_reminders()
+        assert len(items) == 1, items
+        assert items[0]["text"] == "встать и позвонить", items
+
+        # 3. Список виден модели.
+        listed = execute("list_reminders", {})
+        assert listed.get("count") == 1, listed
+
+        # 4. Секреты в напоминание не кладутся.
+        result = execute("add_reminder", {"text": "пароль: hunter2hunter2", "minutes": 5})
+        assert "error" in result, result
+
+        # 5. Удаление убирает напоминание с диска.
+        assert reminders.delete_reminder(items[0]["id"]) is True
+        assert reminders.pending_reminders() == []
+        on_disk = (
+            reminders_file.read_text(encoding="utf-8")
+            if reminders_file.exists()
+            else ""
+        )
+        assert "встать и позвонить" not in on_disk, "напоминание осталось на диске"
+        return "подтверждение, список, секреты и удаление проверены"
+    finally:
+        policy.set_confirm_hook(None)
+        if old_env is None:
+            os.environ.pop("OMEGA_REMINDERS_FILE", None)
+        else:
+            os.environ["OMEGA_REMINDERS_FILE"] = old_env
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def test_agent_llm() -> str:
     import agent
 
@@ -514,6 +569,7 @@ def main() -> int:
     check("сообщения (черновик и заглушка)", test_messages)
     check("компьютер: файлы и секреты", test_computer_tools)
     check("память: секреты, подтверждение, удаление, лимиты", test_memory)
+    check("напоминания: подтверждение, список, удаление", test_reminders)
     check("политика: границы доступа и подтверждения", test_policy_security)
 
     if "--with-llm" in sys.argv:

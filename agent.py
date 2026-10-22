@@ -3,6 +3,7 @@
 # Журнал вызовов пишется в logs/agent.log (без ключей).
 
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,7 @@ from tools import execute, get_tools
 
 
 PROMPT_FILE = Path(config.PROMPT_FILE)
+TIME_HEADER = "--- ТЕКУЩЕЕ ВРЕМЯ ---"
 
 
 def load_system_prompt(path: Path = PROMPT_FILE) -> str:
@@ -47,16 +49,18 @@ def get_system_prompt() -> str:
 
 
 def get_full_prompt() -> str:
-    """Промт с блоком памяти: он уходит модели вместе с остальным текстом."""
+    """Промт с блоком памяти и текущим временем: они уходят модели вместе с текстом."""
     prompt = get_system_prompt()
     try:
         block = memory.memory_block()
     except Exception as exc:  # noqa: BLE001 — память не должна ломать задачу
         safety.log_event("memory_block_error", error=safety.redact(str(exc))[:200])
-        return prompt
-    if not block:
-        return prompt
-    return f"{prompt}\n\n{block}"
+        block = ""
+    if block:
+        prompt = f"{prompt}\n\n{block}"
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    prompt = f"{prompt}\n\n{TIME_HEADER}\nСейчас на компьютере: {now}."
+    return prompt
 
 
 def _shorten(text: str, limit: int = 160) -> str:

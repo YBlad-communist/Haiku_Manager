@@ -52,6 +52,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import memory  # noqa: E402
 import policy  # noqa: E402
+import reminders  # noqa: E402
 
 CSP = (
     "default-src 'self'; "
@@ -80,6 +81,11 @@ class ConfirmIn(BaseModel):
 
 class MemoryIn(BaseModel):
     text: str = ""
+
+
+class ReminderIn(BaseModel):
+    text: str = ""
+    minutes: int = 0
 
 
 @dataclass
@@ -894,6 +900,33 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
             "text": memory.export_text(),
             "file": f"omega-memory-{datetime.now().strftime('%Y%m%d-%H%M%S')}.txt",
         }
+
+    @app.get("/api/reminders")
+    async def reminders_list():
+        """Активные напоминания."""
+        return {"reminders": reminders.pending_reminders()}
+
+    @app.post("/api/reminders")
+    async def reminders_add(payload: ReminderIn):
+        """Создаёт напоминание (после подтверждения в окне)."""
+        item, error = reminders.add_reminder(payload.text, payload.minutes)
+        if item is None:
+            return JSONResponse({"error": error}, status_code=400)
+        return {"ok": True, "reminder": item}
+
+    @app.delete("/api/reminders/{reminder_id}")
+    async def reminders_delete(reminder_id: str):
+        """Удаляет напоминание."""
+        if not reminders.delete_reminder(reminder_id):
+            return JSONResponse({"error": "Напоминание не найдено."}, status_code=404)
+        return {"ok": True}
+
+    @app.post("/api/reminders/{reminder_id}/done")
+    async def reminders_done(reminder_id: str):
+        """Отмечает напоминание как сработавшее."""
+        if not reminders.mark_done(reminder_id):
+            return JSONResponse({"error": "Напоминание не найдено."}, status_code=404)
+        return {"ok": True}
 
     @app.get("/api/chats")
     async def chats_list():

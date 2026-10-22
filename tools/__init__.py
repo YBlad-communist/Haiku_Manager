@@ -15,6 +15,7 @@ from .messages import draft_message, send_message
 from .computer import COMPUTER_TOOLS, HANDLERS as COMPUTER_HANDLERS
 from .actions import ACTIONS_TOOLS, HANDLERS as ACTION_HANDLERS
 from .memory import MEMORY_TOOL, memory_propose
+from .reminders import REMINDER_TOOLS, HANDLERS as REMINDER_HANDLERS
 
 
 ALL_TOOLS: list[dict] = [
@@ -195,7 +196,7 @@ ALL_TOOLS: list[dict] = [
             },
         },
     },
-] + COMPUTER_TOOLS + ACTIONS_TOOLS + [MEMORY_TOOL]
+] + COMPUTER_TOOLS + ACTIONS_TOOLS + [MEMORY_TOOL] + REMINDER_TOOLS
 
 
 SALES_TOOL_NAMES = frozenset(
@@ -236,6 +237,7 @@ HANDLERS: dict[str, Callable[..., dict]] = {
     "memory_propose": memory_propose,
     **COMPUTER_HANDLERS,
     **ACTION_HANDLERS,
+    **REMINDER_HANDLERS,
 }
 
 

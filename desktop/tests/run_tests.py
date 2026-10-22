@@ -35,7 +35,15 @@ class Server:
         self.history_file = Path(tempfile.gettempdir()) / f"omega_history_{os.getpid()}.json"
         self.trash_file = Path(tempfile.gettempdir()) / f"omega_trash_{os.getpid()}.json"
         self.memory_file = Path(tempfile.gettempdir()) / f"omega_memory_{os.getpid()}.json"
-        for path in (self.history_file, self.trash_file, self.memory_file):
+        self.reminders_file = (
+            Path(tempfile.gettempdir()) / f"omega_reminders_{os.getpid()}.json"
+        )
+        for path in (
+            self.history_file,
+            self.trash_file,
+            self.memory_file,
+            self.reminders_file,
+        ):
             if path.exists():
                 path.unlink()
         env = {
@@ -45,6 +53,7 @@ class Server:
             "OMEGA_HISTORY_FILE": str(self.history_file),
             "OMEGA_TRASH_FILE": str(self.trash_file),
             "OMEGA_MEMORY_FILE": str(self.memory_file),
+            "OMEGA_REMINDERS_FILE": str(self.reminders_file),
             "BUDGET_LIMIT_RUB": "500",
             "PYTHONIOENCODING": "utf-8",
             "PYTHONUTF8": "1",
@@ -173,6 +182,8 @@ class Server:
             self.trash_file.unlink()
         if self.memory_file.exists():
             self.memory_file.unlink()
+        if self.reminders_file.exists():
+            self.reminders_file.unlink()
 
 
 def read_events(response):
@@ -637,6 +648,49 @@ def main() -> int:
             "POST", "/api/memory/clear", token=TOKEN, origin=server.origin, body={}
         )
         check("очистка памяти работает", status == 200, str(status))
+
+        # --- Напоминания ---
+        status, _, body = server.request("GET", "/api/reminders", token=TOKEN)
+        empty_list = json.loads(body.decode("utf-8"))
+        check(
+            "напоминания отдаются списком",
+            status == 200 and empty_list.get("reminders") == [],
+            f"status={status}, body={empty_list}",
+        )
+
+        status, _, body = server.request(
+            "POST",
+            "/api/reminders",
+            token=TOKEN,
+            origin=server.origin,
+            body={"text": "встать и позвонить", "minutes": 30},
+        )
+        reminder = json.loads(body.decode("utf-8")).get("reminder") or {}
+        reminder_id = reminder.get("id")
+        check(
+            "напоминание создаётся",
+            status == 200 and bool(reminder_id),
+            f"status={status}, body={reminder}",
+        )
+
+        status, _, body = server.request("GET", "/api/reminders", token=TOKEN)
+        listed = json.loads(body.decode("utf-8")).get("reminders", [])
+        check(
+            "напоминание видно в списке",
+            status == 200 and len(listed) == 1,
+            f"status={status}, count={len(listed)}",
+        )
+
+        status, _, _ = server.request(
+            "DELETE", f"/api/reminders/{reminder_id}", token=TOKEN, origin=server.origin
+        )
+        status2, _, body = server.request("GET", "/api/reminders", token=TOKEN)
+        left = json.loads(body.decode("utf-8")).get("reminders", [])
+        check(
+            "напоминание удаляется",
+            status == 200 and left == [],
+            f"status={status}, left={left}",
+        )
 
         status, _, _ = server.request("POST", "/api/task", token=TOKEN, body={"task": "x"})
         check("POST без Origin — 403", status == 403, str(status))

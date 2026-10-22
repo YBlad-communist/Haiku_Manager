@@ -496,6 +496,17 @@ MEMORY_PRIVATE_KEY_RE = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
 MEMORY_ENV_RE = re.compile(r"(?m)^\s*[A-Z][A-Z0-9_]{2,}\s*=\s*\S+")
 
 
+def is_secret_text(text) -> bool:
+    """Похоже ли текст на пароль, ключ или токен."""
+    if not isinstance(text, str) or not text.strip():
+        return False
+    return bool(
+        MEMORY_PRIVATE_KEY_RE.search(text)
+        or MEMORY_TOKEN_RE.search(text)
+        or MEMORY_SECRET_FIELD_RE.search(text)
+    )
+
+
 def validate_memory_text(text) -> tuple[str, str]:
     """Проверяет текст памяти. Возвращает (чистый текст, причина отказа).
 
