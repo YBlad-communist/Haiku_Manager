@@ -18,6 +18,9 @@ const state = {
   recordingHotkey: false,
   settingsBusy: false,
   promptInfo: null,
+  memory: [],
+  memoryEnabled: true,
+  editingMemoryId: null,
   voiceToken: 0,
   voiceRecording: false,
   voiceBusy: false,
@@ -79,6 +82,11 @@ const els = {
   modelSelect: document.getElementById("modelSelect"),
   modelNote: document.getElementById("modelNote"),
   themeSelect: document.getElementById("themeSelect"),
+  memoryToggle: document.getElementById("memoryToggle"),
+  memoryList: document.getElementById("memoryList"),
+  memoryEmpty: document.getElementById("memoryEmpty"),
+  memoryExport: document.getElementById("memoryExport"),
+  memoryClear: document.getElementById("memoryClear"),
   launchToggle: document.getElementById("launchToggle"),
   allowedApps: document.getElementById("allowedApps"),
   allowedAppsEmpty: document.getElementById("allowedAppsEmpty"),
@@ -774,9 +782,41 @@ function parseBlock(block) {
   }
 }
 
+const MEMORY_COMMAND_RE = /^\s*запомни[,:\s]+(.+)$/i;
+
+async function proposeMemory(text) {
+  if (state.settings && state.settings.memory_enabled === false) {
+    showToast("Память выключена в настройках.");
+    return;
+  }
+  try {
+    const data = await apiJson("/api/memory/propose", {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    });
+    openConfirm({
+      kind: "memory_propose",
+      local: true,
+      title: "Запомнить?",
+      text: data.text || text,
+      always_path: "",
+    });
+  } catch (error) {
+    showToast(error.message || "Не удалось проверить запись памяти.");
+  }
+}
+
 async function submitTask() {
   const task = els.input.value.trim();
   if (!task || state.running) {
+    return;
+  }
+
+  const memoryMatch = task.match(MEMORY_COMMAND_RE);
+  if (memoryMatch) {
+    els.input.value = "";
+    addUserMessage(task);
+    await proposeMemory(memoryMatch[1].trim());
     return;
   }
 
@@ -1008,6 +1048,9 @@ function confirmSubtitle(event) {
   if (isSend) {
     return `Помощник хочет написать компании «${event.company || event.recipient || "без названия"}»`;
   }
+  if (event.kind === "memory_propose") {
+    return "Помощник хочет запомнить сведения о тебе.";
+  }
   const subtitles = {
     delete_files: "Помощник хочет удалить файлы или папки. Они уйдут в корзину.",
     launch_app: "Помощник хочет запустить программу.",
@@ -1028,6 +1071,7 @@ function openConfirm(event) {
   state.modalBusy = false;
 
   const isSend = event.kind === "send_message";
+  const isMemory = event.kind === "memory_propose";
   els.modalTitle.textContent = event.title || "Подтвердить действие?";
   els.modalSubtitle.textContent = confirmSubtitle(event);
   els.draftText.textContent = String(event.text || "");
@@ -1037,8 +1081,13 @@ function openConfirm(event) {
   els.modalChips.hidden = !isSend;
   els.chipChannel.textContent = `Канал: ${event.channel || "—"}`;
   els.chipToday.textContent = `Сегодня: ${event.today || 0} из ${event.limit || 0}`;
-  els.edit.hidden = !isSend;
-  els.approve.textContent = isSend ? "Отправить" : "Подтвердить";
+  els.edit.hidden = !isSend && !isMemory;
+  els.approve.textContent = isSend
+    ? "Отправить"
+    : isMemory
+      ? "Запомнить"
+      : "Подтвердить";
+  els.reject.textContent = isMemory ? "Не надо" : "Отклонить";
   const canAlways = event.kind === "launch_app" && Boolean(event.always_path);
   els.alwaysRow.hidden = !canAlways;
   els.alwaysCheck.checked = false;
@@ -1079,11 +1128,15 @@ async function answerConfirm(action) {
     return;
   }
 
+  const isMemory = event.kind === "memory_propose";
   let text = "";
   if (action === "edit") {
     text = els.draftEdit.value.trim();
-    if (text.length < 20) {
-      els.modalError.textContent = "Текст слишком короткий: нужно минимум 20 символов.";
+    const minLength = isMemory ? 1 : 20;
+    if (text.length < minLength) {
+      els.modalError.textContent = isMemory
+        ? "Пустую запись сохранять нельзя."
+        : "Текст слишком короткий: нужно минимум 20 символов.";
       els.modalError.hidden = false;
       els.draftEdit.focus();
       return;
@@ -1100,12 +1153,32 @@ async function answerConfirm(action) {
   setModalBusy(true);
   els.modalError.hidden = true;
   try {
+    if (isMemory && event.local) {
+      if (action !== "approve" && action !== "edit") {
+        closeConfirm();
+        return;
+      }
+      const finalText = state.editing
+        ? els.draftEdit.value.trim()
+        : String(event.text || "").trim();
+      await apiJson("/api/memory", {
+        method: "POST",
+        body: JSON.stringify({ text: finalText }),
+      });
+      closeConfirm();
+      await refreshMemory();
+      showToast("Запомнил.");
+      return;
+    }
     await apiJson("/api/confirm", {
       method: "POST",
       body: JSON.stringify({ id: event.id, action: finalAction, text }),
     });
     closeConfirm();
-    if (always) {
+    if (isMemory) {
+      await refreshMemory();
+      showToast("Запомнил.");
+    } else if (always) {
       await rememberAllowedApp(event.always_path);
       showToast("Приложение разрешено навсегда.");
     } else if (action === "edit") {
@@ -1119,7 +1192,8 @@ async function answerConfirm(action) {
 }
 
 function enterEditMode() {
-  if (!state.pending || state.pending.kind !== "send_message" || state.editing) {
+  const kind = state.pending?.kind;
+  if (!state.pending || (kind !== "send_message" && kind !== "memory_propose") || state.editing) {
     return;
   }
   state.editing = true;
@@ -1784,6 +1858,9 @@ function applySettingsToUi() {
   els.launchToggle.setAttribute("aria-checked", String(launch));
   els.launchToggle.classList.toggle("on", launch);
   renderAllowedApps();
+  const memoryEnabled = state.settings.memory_enabled !== false;
+  els.memoryToggle.setAttribute("aria-checked", String(memoryEnabled));
+  els.memoryToggle.classList.toggle("on", memoryEnabled);
   applyTheme(theme);
   if (document.activeElement !== els.userPrompt) {
     els.userPrompt.value = state.settings.user_prompt || "";
@@ -1834,6 +1911,156 @@ async function removeAllowedApp(path) {
   });
   if (ok) {
     showToast("Приложение убрано из разрешённых.");
+  }
+}
+
+function renderMemory() {
+  const entries = Array.isArray(state.memory) ? state.memory : [];
+  els.memoryList.replaceChildren();
+  els.memoryEmpty.hidden = entries.length > 0;
+  for (const item of entries) {
+    const row = document.createElement("li");
+    row.className = "memory-item";
+    if (state.editingMemoryId === item.id) {
+      const area = document.createElement("textarea");
+      area.className = "ci memory-edit";
+      area.value = item.text || "";
+      area.maxLength = 300;
+      area.setAttribute("aria-label", "Текст записи памяти");
+      const actions = document.createElement("div");
+      actions.className = "memory-actions";
+      const save = document.createElement("button");
+      save.type = "button";
+      save.className = "ci btn";
+      save.textContent = "Сохранить";
+      save.addEventListener("click", () => saveMemoryEntry(item.id, area.value));
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.className = "ci btn";
+      cancel.textContent = "Отмена";
+      cancel.addEventListener("click", () => {
+        state.editingMemoryId = null;
+        renderMemory();
+      });
+      actions.append(save, cancel);
+      row.append(area, actions);
+    } else {
+      const text = document.createElement("p");
+      text.className = "memory-text";
+      text.textContent = item.text || "";
+      const date = document.createElement("span");
+      date.className = "memory-date";
+      date.textContent = item.date || "";
+      const actions = document.createElement("div");
+      actions.className = "memory-actions";
+      const edit = document.createElement("button");
+      edit.type = "button";
+      edit.className = "ci btn";
+      edit.textContent = "Изменить";
+      edit.addEventListener("click", () => {
+        state.editingMemoryId = item.id;
+        renderMemory();
+      });
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "ci btn";
+      remove.textContent = "Удалить";
+      remove.addEventListener("click", () => deleteMemoryEntry(item.id));
+      actions.append(edit, remove);
+      row.append(text, date, actions);
+    }
+    els.memoryList.append(row);
+  }
+}
+
+async function refreshMemory() {
+  try {
+    const data = await apiJson("/api/memory");
+    state.memory = Array.isArray(data.entries) ? data.entries : [];
+    state.memoryEnabled = data.enabled !== false;
+    renderMemory();
+  } catch {
+    // Память недоступна — экран настроек просто останется пустым.
+  }
+}
+
+async function saveMemoryEntry(id, text) {
+  try {
+    await apiJson(`/api/memory/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify({ text }),
+    });
+    state.editingMemoryId = null;
+    await refreshMemory();
+    showToast("Запись памяти изменена.");
+  } catch (error) {
+    showToast(error.message || "Не удалось изменить запись.");
+  }
+}
+
+async function deleteMemoryEntry(id) {
+  if (!window.confirm("Удалить эту запись из памяти?")) {
+    return;
+  }
+  try {
+    await apiJson(`/api/memory/${encodeURIComponent(id)}`, { method: "DELETE" });
+    state.editingMemoryId = null;
+    await refreshMemory();
+    showToast("Запись удалена.");
+  } catch (error) {
+    showToast(error.message || "Не удалось удалить запись.");
+  }
+}
+
+async function clearMemory() {
+  if (!window.confirm("Удалить всю память? Восстановить её будет нельзя.")) {
+    return;
+  }
+  try {
+    await apiJson("/api/memory/clear", { method: "POST", body: "{}" });
+    state.editingMemoryId = null;
+    await refreshMemory();
+    showToast("Память очищена.");
+  } catch (error) {
+    showToast(error.message || "Не удалось очистить память.");
+  }
+}
+
+async function exportMemory() {
+  try {
+    const data = await apiJson("/api/memory/export");
+    const blob = new Blob([data.text || ""], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = data.file || "omega-memory.txt";
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    showToast("Файл памяти сохранён в загрузки.");
+  } catch (error) {
+    showToast(error.message || "Не удалось выгрузить память.");
+  }
+}
+
+async function toggleMemoryEnabled() {
+  if (!state.settings || state.settingsBusy) {
+    return;
+  }
+  state.settingsBusy = true;
+  els.memoryToggle.disabled = true;
+  const desired = !state.settings.memory_enabled;
+  const ok = await saveSettingsPatch({ memory_enabled: desired });
+  els.memoryToggle.disabled = false;
+  state.settingsBusy = false;
+  if (ok) {
+    state.memoryEnabled = desired;
+    showToast(
+      desired ? "Память включена." : "Память выключена: модель её не получает.",
+    );
+  } else {
+    applySettingsToUi();
   }
 }
 
@@ -1903,6 +2130,7 @@ async function openSettings() {
       updatePromptCounter();
       applyModelNote(settings.model);
     }
+    await refreshMemory();
   } catch (error) {
     showToast(error.message || "Не удалось открыть настройки.");
     return;
@@ -2213,6 +2441,9 @@ function bindEvents() {
   els.budgetInput.addEventListener("blur", saveBudget);
   els.voiceLanguage.addEventListener("change", saveVoiceLanguage);
   els.salesToggle.addEventListener("click", toggleSalesModule);
+  els.memoryToggle.addEventListener("click", toggleMemoryEnabled);
+  els.memoryClear.addEventListener("click", clearMemory);
+  els.memoryExport.addEventListener("click", exportMemory);
   els.launchToggle.addEventListener("click", toggleLaunchWithoutConfirm);
   els.modelSelect.addEventListener("change", saveModel);
   els.themeSelect.addEventListener("change", saveTheme);

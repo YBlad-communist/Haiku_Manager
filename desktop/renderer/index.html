@@ -148,6 +148,30 @@
 
         <section class="setting">
           <div class="setting-text">
+            <h3>Использовать память</h3>
+            <p>Омега помнит короткие сведения о тебе и передаёт их модели при каждом запросе.</p>
+          </div>
+          <button type="button" class="switch ci" id="memoryToggle" role="switch" aria-checked="true" aria-label="Использовать память">
+            <span class="switch-knob"></span>
+          </button>
+        </section>
+
+        <section class="setting setting-column">
+          <div class="setting-text">
+            <h3>Память</h3>
+            <p>Сведения о тебе: имя, город, привычки. Ключи, пароли и чужие данные сюда не попадают.</p>
+          </div>
+          <ul class="memory-list ci" id="memoryList"></ul>
+          <p class="fineprint" id="memoryEmpty">Память пока пуста.</p>
+          <p class="fineprint">Память отправляется модели при каждом запросе.</p>
+          <div class="memory-tools">
+            <button type="button" class="ci btn" id="memoryExport">Экспорт в файл</button>
+            <button type="button" class="ci btn" id="memoryClear">Очистить всё</button>
+          </div>
+        </section>
+
+        <section class="setting">
+          <div class="setting-text">
             <h3>Запуск приложений</h3>
             <p>По умолчанию Омега спрашивает перед запуском программы.</p>
           </div>

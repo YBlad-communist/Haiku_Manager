@@ -3,6 +3,7 @@
 
 import base64
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -467,3 +468,61 @@ def human_size(size: int) -> str:
             return f"{value:.1f} {unit}"
         value /= 1024
     return f"{value:.1f} ГБ"
+
+
+# --- Глобальная память ---
+# Правила памяти живут здесь, а не в промте: код нельзя переубедить текстом.
+
+MEMORY_MAX_ENTRIES = 30
+MEMORY_MAX_TOTAL_CHARS = 2000
+MEMORY_MAX_TEXT_CHARS = 300
+MEMORY_MAX_LINES = 8
+
+# Ключи и токены: sk-..., длинные случайные строки, JWT, строки base64.
+MEMORY_TOKEN_RE = re.compile(
+    r"(?i)\b(?:sk-[A-Za-z0-9_\-]{8,}|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}"
+    r"|[A-Za-z0-9_\-]{40,})\b"
+)
+# Пароли и другие секреты по названию поля.
+MEMORY_SECRET_FIELD_RE = re.compile(
+    r"(?i)\b(?:passwo?rd|passwd|pwd|secret|token|api[_-]?key|access[_-]?key"
+    r"|private[_-]?key|пароль|парол[ьи]|ключ|токен)\b\s*[:=]?\s*\S+"
+)
+# Номер банковской карты: 13-19 цифр с разделителями.
+MEMORY_CARD_RE = re.compile(r"(?<!\d)(?:\d[ -]?){13,19}(?!\d)")
+# Приватный ключ.
+MEMORY_PRIVATE_KEY_RE = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
+# Содержимое .env: несколько строк вида ПЕРЕМЕННАЯ=значение.
+MEMORY_ENV_RE = re.compile(r"(?m)^\s*[A-Z][A-Z0-9_]{2,}\s*=\s*\S+")
+
+
+def validate_memory_text(text) -> tuple[str, str]:
+    """Проверяет текст памяти. Возвращает (чистый текст, причина отказа).
+
+    Пустая причина означает, что текст можно сохранять.
+    """
+    if not isinstance(text, str):
+        return "", "Память должна быть текстом."
+    cleaned = " ".join(text.split())
+    if not cleaned:
+        return "", "Пустая память — нечего сохранять."
+    if MEMORY_PRIVATE_KEY_RE.search(cleaned):
+        return "", "Похоже на приватный ключ. Такое не сохраняю."
+    if MEMORY_TOKEN_RE.search(cleaned):
+        return "", "Похоже на ключ или токен. Такое не сохраняю."
+    if MEMORY_SECRET_FIELD_RE.search(cleaned):
+        return "", "Похоже на пароль или секрет. Такое не сохраняю."
+    if MEMORY_CARD_RE.search(cleaned):
+        return "", "Похоже на номер банковской карты. Такое не сохраняю."
+    if len(MEMORY_ENV_RE.findall(cleaned)) >= 2:
+        return "", "Похоже на содержимое .env. Такое не сохраняю."
+    if len(cleaned.splitlines()) > MEMORY_MAX_LINES:
+        return "", (
+            "Слишком много строк — это похоже на кусок файла. "
+            "В память кладут короткие факты, а не файлы."
+        )
+    if safety.detect_injection(cleaned):
+        return "", "Похоже на инструкцию для модели. Такое не сохраняю."
+    if len(cleaned) > MEMORY_MAX_TEXT_CHARS:
+        cleaned = cleaned[: MEMORY_MAX_TEXT_CHARS - 1].rstrip() + "…"
+    return cleaned, ""

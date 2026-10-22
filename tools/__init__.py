@@ -14,6 +14,7 @@ from .twogis import search_companies_2gis
 from .messages import draft_message, send_message
 from .computer import COMPUTER_TOOLS, HANDLERS as COMPUTER_HANDLERS
 from .actions import ACTIONS_TOOLS, HANDLERS as ACTION_HANDLERS
+from .memory import MEMORY_TOOL, memory_propose
 
 
 ALL_TOOLS: list[dict] = [
@@ -194,23 +195,31 @@ ALL_TOOLS: list[dict] = [
             },
         },
     },
-] + COMPUTER_TOOLS + ACTIONS_TOOLS
+] + COMPUTER_TOOLS + ACTIONS_TOOLS + [MEMORY_TOOL]
 
 
 SALES_TOOL_NAMES = frozenset(
     {"search_companies_2gis", "draft_message", "send_message"}
 )
+MEMORY_TOOL_NAMES = frozenset({"memory_propose"})
 
 
 def get_tools() -> list[dict]:
     """Отдаёт модели только инструменты включённых модулей."""
-    if config.current_sales_module():
-        return list(ALL_TOOLS)
-    return [
-        tool
-        for tool in ALL_TOOLS
-        if tool["function"]["name"] not in SALES_TOOL_NAMES
-    ]
+    tools = list(ALL_TOOLS)
+    if not config.current_sales_module():
+        tools = [
+            tool
+            for tool in tools
+            if tool["function"]["name"] not in SALES_TOOL_NAMES
+        ]
+    if not config.current_memory_enabled():
+        tools = [
+            tool
+            for tool in tools
+            if tool["function"]["name"] not in MEMORY_TOOL_NAMES
+        ]
+    return tools
 
 
 # Оставлено для совместимости: агенту нужно вызывать get_tools(), а не этот снимок.
@@ -224,6 +233,7 @@ HANDLERS: dict[str, Callable[..., dict]] = {
     "search_companies_2gis": search_companies_2gis,
     "draft_message": draft_message,
     "send_message": send_message,
+    "memory_propose": memory_propose,
     **COMPUTER_HANDLERS,
     **ACTION_HANDLERS,
 }

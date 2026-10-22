@@ -52,6 +52,7 @@ const DEFAULTS = {
   budget_limit_rub: 500,
   voice_language: "ru",
   sales_module: false,
+  memory_enabled: true,
   model: "claude-haiku-5.5",
   user_prompt: "",
   theme: "light",
@@ -92,6 +93,10 @@ function sanitizeSettings(value, base = DEFAULTS) {
     typeof source.sales_module === "boolean"
       ? source.sales_module
       : Boolean(base.sales_module);
+  const memoryEnabled =
+    typeof source.memory_enabled === "boolean"
+      ? source.memory_enabled
+      : base.memory_enabled !== false;
   const model = MODEL_IDS.has(source.model)
     ? source.model
     : MODEL_IDS.has(base.model)
@@ -150,6 +155,7 @@ function sanitizeSettings(value, base = DEFAULTS) {
     budget_limit_rub: budget,
     voice_language: voiceLanguage,
     sales_module: salesModule,
+    memory_enabled: memoryEnabled,
     model,
     user_prompt: userPrompt,
     theme,

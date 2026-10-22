@@ -561,6 +561,7 @@ function registerIpc() {
       "budget_limit_rub",
       "voice_language",
       "sales_module",
+      "memory_enabled",
       "model",
       "user_prompt",
       "theme",

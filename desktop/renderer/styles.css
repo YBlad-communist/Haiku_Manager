@@ -996,6 +996,67 @@ textarea.draft {
   gap: 8px;
 }
 
+.memory-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.memory-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas: "text actions" "date actions";
+  align-items: center;
+  gap: 4px 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(91, 88, 115, .16);
+  border-radius: 12px;
+  background: rgba(91, 88, 115, .06);
+}
+
+.memory-text {
+  grid-area: text;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.memory-date {
+  grid-area: date;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.memory-actions {
+  grid-area: actions;
+  display: flex;
+  gap: 8px;
+}
+
+.memory-edit {
+  grid-area: text;
+  width: 100%;
+  min-height: 64px;
+  padding: 9px 11px;
+  border: 1px solid rgba(91, 88, 115, .24);
+  border-radius: 10px;
+  background: var(--bg, #fff);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+
+.memory-tools {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+}
+
 .allowed-app {
   display: flex;
   align-items: center;

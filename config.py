@@ -162,6 +162,12 @@ def current_sales_module() -> bool:
     """Модуль продаж выключен, пока пользователь явно не включил его в настройках."""
     return load_settings().get("sales_module") is True
 
+
+def current_memory_enabled() -> bool:
+    """Глобальная память включена, пока пользователь её не выключил."""
+    return load_settings().get("memory_enabled") is not False
+
+
 # --- 2ГИС ---
 TWOGIS_API_KEY = os.environ.get("TWOGIS_API_KEY", "")
 TWOGIS_BASE = "https://catalog.api.2gis.com"

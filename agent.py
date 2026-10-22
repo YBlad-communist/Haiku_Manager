@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import config
+import memory
 import safety
 from llm import BudgetExceeded, LLM
 from tools import execute, get_tools
@@ -45,6 +46,19 @@ def get_system_prompt() -> str:
     return prompt
 
 
+def get_full_prompt() -> str:
+    """Промт с блоком памяти: он уходит модели вместе с остальным текстом."""
+    prompt = get_system_prompt()
+    try:
+        block = memory.memory_block()
+    except Exception as exc:  # noqa: BLE001 — память не должна ломать задачу
+        safety.log_event("memory_block_error", error=safety.redact(str(exc))[:200])
+        return prompt
+    if not block:
+        return prompt
+    return f"{prompt}\n\n{block}"
+
+
 def _shorten(text: str, limit: int = 160) -> str:
     text = text.replace("\n", " ")
     return text if len(text) <= limit else text[:limit] + "..."
@@ -80,7 +94,7 @@ def run(
     messages: list[dict[str, Any]] = [
         {
             "role": "system",
-            "content": get_system_prompt(),
+            "content": get_full_prompt(),
         },
     ]
     for item in history or []:

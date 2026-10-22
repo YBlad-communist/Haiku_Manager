@@ -34,16 +34,17 @@ class Server:
     def __init__(self) -> None:
         self.history_file = Path(tempfile.gettempdir()) / f"omega_history_{os.getpid()}.json"
         self.trash_file = Path(tempfile.gettempdir()) / f"omega_trash_{os.getpid()}.json"
-        if self.history_file.exists():
-            self.history_file.unlink()
-        if self.trash_file.exists():
-            self.trash_file.unlink()
+        self.memory_file = Path(tempfile.gettempdir()) / f"omega_memory_{os.getpid()}.json"
+        for path in (self.history_file, self.trash_file, self.memory_file):
+            if path.exists():
+                path.unlink()
         env = {
             **os.environ,
             "OMEGA_TOKEN": TOKEN,
             "OMEGA_TEST_WORKER": "1",
             "OMEGA_HISTORY_FILE": str(self.history_file),
             "OMEGA_TRASH_FILE": str(self.trash_file),
+            "OMEGA_MEMORY_FILE": str(self.memory_file),
             "BUDGET_LIMIT_RUB": "500",
             "PYTHONIOENCODING": "utf-8",
             "PYTHONUTF8": "1",
@@ -170,6 +171,8 @@ class Server:
             self.history_file.unlink()
         if self.trash_file.exists():
             self.trash_file.unlink()
+        if self.memory_file.exists():
+            self.memory_file.unlink()
 
 
 def read_events(response):
@@ -559,6 +562,81 @@ def main() -> int:
         finally:
             if shot_file.exists():
                 shot_file.unlink()
+
+        # --- Память ---
+        status, _, body = server.request("GET", "/api/memory", token=TOKEN)
+        empty_memory = json.loads(body.decode("utf-8"))
+        check(
+            "память отдаётся списком",
+            status == 200 and empty_memory.get("entries") == [],
+            f"status={status}, body={empty_memory}",
+        )
+
+        status, _, body = server.request(
+            "POST",
+            "/api/memory/propose",
+            token=TOKEN,
+            origin=server.origin,
+            body={"text": "sk-abcdefghijklmnopqrstuvwxyz"},
+        )
+        check(
+            "секрет в память не проходит",
+            status == 400,
+            f"status={status}, body={body[:120]}",
+        )
+
+        status, _, body = server.request(
+            "POST",
+            "/api/memory",
+            token=TOKEN,
+            origin=server.origin,
+            body={"text": "Люблю Казань"},
+        )
+        added = json.loads(body.decode("utf-8"))
+        entry_id = (added.get("entry") or {}).get("id")
+        check(
+            "запись памяти добавляется",
+            status == 200 and bool(entry_id),
+            f"status={status}, body={added}",
+        )
+
+        status, _, body = server.request(
+            "PUT",
+            f"/api/memory/{entry_id}",
+            token=TOKEN,
+            origin=server.origin,
+            body={"text": "Люблю Казань и кофе"},
+        )
+        check(
+            "запись памяти меняется",
+            status == 200
+            and "кофе" in json.loads(body.decode("utf-8")).get("entry", {}).get("text", ""),
+            f"status={status}",
+        )
+
+        status, _, body = server.request("GET", "/api/memory/export", token=TOKEN)
+        exported = json.loads(body.decode("utf-8"))
+        check(
+            "память выгружается в текст",
+            status == 200 and "Казань" in exported.get("text", ""),
+            f"status={status}",
+        )
+
+        status, _, _ = server.request(
+            "DELETE", f"/api/memory/{entry_id}", token=TOKEN, origin=server.origin
+        )
+        status2, _, body = server.request("GET", "/api/memory", token=TOKEN)
+        left = json.loads(body.decode("utf-8")).get("entries", [])
+        check(
+            "удалённая запись исчезает с диска",
+            status == 200 and left == [],
+            f"status={status}, entries={left}",
+        )
+
+        status, _, _ = server.request(
+            "POST", "/api/memory/clear", token=TOKEN, origin=server.origin, body={}
+        )
+        check("очистка памяти работает", status == 200, str(status))
 
         status, _, _ = server.request("POST", "/api/task", token=TOKEN, body={"task": "x"})
         check("POST без Origin — 403", status == 403, str(status))

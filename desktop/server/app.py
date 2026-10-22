@@ -50,6 +50,9 @@ class SpeechUnavailable(Exception):
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+import memory  # noqa: E402
+import policy  # noqa: E402
+
 CSP = (
     "default-src 'self'; "
     "script-src 'self'; "
@@ -72,6 +75,10 @@ class TaskIn(BaseModel):
 class ConfirmIn(BaseModel):
     id: str = ""
     action: str = ""
+    text: str = ""
+
+
+class MemoryIn(BaseModel):
     text: str = ""
 
 
@@ -830,6 +837,63 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
     @app.get("/api/history")
     async def history():
         return {"tasks": _load_history()[:50]}
+
+    @app.get("/api/memory")
+    async def memory_list():
+        """Записи глобальной памяти."""
+        return {
+            "entries": memory.load_entries(),
+            "enabled": memory.memory_enabled(),
+            "max_entries": policy.MEMORY_MAX_ENTRIES,
+            "max_chars": policy.MEMORY_MAX_TOTAL_CHARS,
+        }
+
+    @app.post("/api/memory")
+    async def memory_add(payload: MemoryIn):
+        """Добавляет запись памяти (после подтверждения в окне)."""
+        entry, error = memory.add_entry(payload.text)
+        if entry is None:
+            return JSONResponse({"error": error}, status_code=400)
+        return {"ok": True, "entry": entry}
+
+    @app.post("/api/memory/propose")
+    async def memory_propose(payload: MemoryIn):
+        """Проверяет текст памяти, ничего не сохраняя."""
+        cleaned, reason = policy.validate_memory_text(payload.text)
+        if reason:
+            return JSONResponse({"error": reason}, status_code=400)
+        return {"ok": True, "text": cleaned}
+
+    @app.put("/api/memory/{entry_id}")
+    async def memory_update(entry_id: str, payload: MemoryIn):
+        """Меняет текст записи."""
+        entry, error = memory.update_entry(entry_id, payload.text)
+        if entry is None:
+            code = 404 if error == "Запись не найдена." else 400
+            return JSONResponse({"error": error}, status_code=code)
+        return {"ok": True, "entry": entry}
+
+    @app.delete("/api/memory/{entry_id}")
+    async def memory_delete(entry_id: str):
+        """Удаляет одну запись."""
+        if not memory.delete_entry(entry_id):
+            return JSONResponse({"error": "Запись не найдена."}, status_code=404)
+        return {"ok": True}
+
+    @app.post("/api/memory/clear")
+    async def memory_clear():
+        """Очищает всю память."""
+        memory.clear_entries()
+        return {"ok": True}
+
+    @app.get("/api/memory/export")
+    async def memory_export():
+        """Выгрузка памяти в текст."""
+        return {
+            "ok": True,
+            "text": memory.export_text(),
+            "file": f"omega-memory-{datetime.now().strftime('%Y%m%d-%H%M%S')}.txt",
+        }
 
     @app.get("/api/chats")
     async def chats_list():
