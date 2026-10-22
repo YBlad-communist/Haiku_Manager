@@ -82,8 +82,6 @@ def read_document(path: str) -> dict:
     target, error = policy.resolve_path(path)
     if error:
         return {"error": error}
-    if policy.is_forbidden(target):
-        return {"error": "Эта папка закрыта для Омеги."}
     problem = docs.check_file(target)
     if problem:
         return {"error": problem}
@@ -149,11 +147,7 @@ def write_document(path: str, content) -> dict:
     target, error = policy.resolve_path(path)
     if error:
         return {"error": error}
-    if policy.is_forbidden(target):
-        return {"error": "В эту папку Омега не пишет."}
     suffix = target.suffix.lower()
-    if suffix in docs.BLOCKED_EXTENSIONS:
-        return {"error": f"Формат {suffix} запрещён: {docs.BLOCKED_EXTENSIONS[suffix]}."}
     if suffix not in (".docx", ".xlsx"):
         return {"error": "Создавать можно только .docx и .xlsx."}
     if not target.parent.is_dir():

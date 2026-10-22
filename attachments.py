@@ -123,8 +123,20 @@ def process_image(raw: bytes) -> dict:
         return {"error": f"Не удалось обработать картинку: {exc}"}
 
 
+def _looks_binary(raw: bytes) -> bool:
+    """Похож ли файл на двоичный."""
+    return b"\x00" in raw[:4096]
+
+
 def process_text(raw: bytes) -> dict:
     """Читает текстовый файл как данные."""
+    if _looks_binary(raw):
+        return {
+            "text": f"[двоичный файл, {len(raw)} байт, текст не извлечён]",
+            "truncated": False,
+            "chars": 0,
+            "bytes": len(raw),
+        }
     text, truncated = _decode_text(raw)
     return {
         "text": text,

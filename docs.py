@@ -15,16 +15,6 @@ MAX_CHARS = 20_000
 MAX_PDF_PAGES = 100
 
 ALLOWED_EXTENSIONS = (".docx", ".xlsx", ".pdf")
-BLOCKED_EXTENSIONS = {
-    ".doc": "старый формат Word без поддержки в библиотеке",
-    ".xls": "старый формат Excel без поддержки в библиотеке",
-    ".xlsm": "книги с макросами запрещены",
-    ".xltm": "шаблоны с макросами запрещены",
-    ".docm": "документы с макросами запрещены",
-    ".xltx": "шаблоны Excel не поддерживаются",
-    ".pptx": "презентации пока не поддерживаются",
-    ".pptm": "презентации с макросами запрещены",
-}
 
 
 def library_missing(package: str, version: str) -> str:
@@ -37,8 +27,6 @@ def library_missing(package: str, version: str) -> str:
 def check_file(target: Path) -> str:
     """Проверяет расширение, размер и доступность файла. Пусто — всё в порядке."""
     suffix = target.suffix.lower()
-    if suffix in BLOCKED_EXTENSIONS:
-        return f"Формат {suffix} запрещён: {BLOCKED_EXTENSIONS[suffix]}."
     if suffix not in ALLOWED_EXTENSIONS:
         return "Поддерживаются только .docx, .xlsx и .pdf."
     if not target.exists():

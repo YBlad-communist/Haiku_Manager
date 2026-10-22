@@ -992,8 +992,6 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
         limit = (
             policy.MAX_IMAGE_BYTES
             if kind == "image"
-            else policy.MAX_TEXT_BYTES
-            if kind == "text"
             else policy.MAX_DOCUMENT_BYTES
         )
         if len(raw) > limit:

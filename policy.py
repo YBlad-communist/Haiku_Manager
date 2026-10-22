@@ -78,82 +78,6 @@ def is_inside(child, parent) -> bool:
     return child_norm.startswith(parent_norm + os.sep)
 
 
-def _known_drives() -> list[Path]:
-    drives: list[Path] = []
-    letters = {os.environ.get("SystemDrive", "C:")[:1].upper(), "C", "D", "E"}
-    for letter in letters:
-        root = Path(f"{letter}:\\")
-        if root.exists():
-            drives.append(root)
-    return drives
-
-
-def forbidden_zones() -> list[Path]:
-    """Папки, куда Омега не ходит: системные и с секретами."""
-    zones: list[Path] = []
-
-    def add(value) -> None:
-        if not value:
-            return
-        try:
-            resolved = _real(value)
-        except (OSError, ValueError):
-            return
-        if resolved not in zones:
-            zones.append(resolved)
-
-    for name in (
-        "SystemRoot",
-        "windir",
-        "ProgramFiles",
-        "ProgramFiles(x86)",
-        "ProgramData",
-    ):
-        add(os.environ.get(name))
-
-    home = Path(os.path.expanduser("~"))
-    for name in (".ssh", ".aws", ".azure", ".gnupg"):
-        add(home / name)
-    add(home / ".config" / "gcloud")
-    add(home / "AppData" / "Roaming" / "Microsoft" / "Credentials")
-
-    for drive in _known_drives():
-        add(drive / "$Recycle.Bin")
-        add(drive / "System Volume Information")
-        add(drive / "Recovery")
-
-    return zones
-
-
-def is_forbidden(path) -> bool:
-    """Находится ли путь в запрещённой зоне."""
-    try:
-        target = _real(path)
-    except (OSError, ValueError):
-        return True
-    return any(is_inside(target, zone) for zone in forbidden_zones())
-
-
-def protected_paths() -> list[Path]:
-    """Файлы, которые Омега не удаляет даже с подтверждением."""
-    return [
-        config.PROJECT_DIR / ".env",
-        config.SETTINGS_FILE,
-        config.DATA_DIR / "history.json",
-        config.DATA_DIR / "outbox.json",
-        config.DATA_DIR / "optouts.txt",
-    ]
-
-
-def is_protected(path) -> bool:
-    """Является ли путь служебным файлом Омеги."""
-    try:
-        target = _norm(_real(path))
-    except (OSError, ValueError):
-        return True
-    return any(target == _norm(item) for item in protected_paths())
-
-
 def _as_text(value) -> str:
     """Путь как строка: принимает и str, и Path."""
     if isinstance(value, str):
@@ -508,8 +432,6 @@ def is_secret_text(text) -> bool:
         or MEMORY_TOKEN_RE.search(text)
         or MEMORY_SECRET_FIELD_RE.search(text)
     )
-
-
 def validate_memory_text(text) -> tuple[str, str]:
     """Проверяет текст памяти. Возвращает (чистый текст, причина отказа).
 
@@ -520,16 +442,6 @@ def validate_memory_text(text) -> tuple[str, str]:
     cleaned = " ".join(text.split())
     if not cleaned:
         return "", "Пустая память — нечего сохранять."
-    if MEMORY_PRIVATE_KEY_RE.search(cleaned):
-        return "", "Похоже на приватный ключ. Такое не сохраняю."
-    if MEMORY_TOKEN_RE.search(cleaned):
-        return "", "Похоже на ключ или токен. Такое не сохраняю."
-    if MEMORY_SECRET_FIELD_RE.search(cleaned):
-        return "", "Похоже на пароль или секрет. Такое не сохраняю."
-    if MEMORY_CARD_RE.search(cleaned):
-        return "", "Похоже на номер банковской карты. Такое не сохраняю."
-    if len(MEMORY_ENV_RE.findall(cleaned)) >= 2:
-        return "", "Похоже на содержимое .env. Такое не сохраняю."
     if len(cleaned.splitlines()) > MEMORY_MAX_LINES:
         return "", (
             "Слишком много строк — это похоже на кусок файла. "
@@ -571,30 +483,7 @@ TEXT_EXTENSIONS = frozenset(
 )
 DOCUMENT_EXTENSIONS = frozenset({".pdf", ".docx", ".xlsx"})
 
-REFUSED_EXTENSIONS = {
-    ".exe": "исполняемые файлы не принимаем",
-    ".msi": "исполняемые файлы не принимаем",
-    ".dll": "исполняемые файлы не принимаем",
-    ".com": "исполняемые файлы не принимаем",
-    ".scr": "исполняемые файлы не принимаем",
-    ".bat": "скрипты не принимаем",
-    ".cmd": "скрипты не принимаем",
-    ".ps1": "скрипты не принимаем",
-    ".vbs": "скрипты не принимаем",
-    ".jscript": "скрипты не принимаем",
-    ".lnk": "ярлыки не принимаем",
-    ".jar": "исполняемые файлы не принимаем",
-    ".zip": "архивы не принимаем и не распаковываем",
-    ".rar": "архивы не принимаем и не распаковываем",
-    ".7z": "архивы не принимаем и не распаковываем",
-    ".tar": "архивы не принимаем и не распаковываем",
-    ".gz": "архивы не принимаем и не распаковываем",
-    ".xlsm": "книги с макросами не принимаем",
-    ".xltm": "шаблоны с макросами не принимаем",
-    ".docm": "документы с макросами не принимаем",
-    ".doc": "старый формат Word не принимаем",
-    ".xls": "старый формат Excel не принимаем",
-}
+REFUSED_EXTENSIONS: dict[str, str] = {}
 
 
 def attachment_kind(name: str) -> tuple[str, str]:
@@ -609,11 +498,9 @@ def attachment_kind(name: str) -> tuple[str, str]:
         return "image", ""
     if suffix in DOCUMENT_EXTENSIONS:
         return "document", ""
-    if suffix in TEXT_EXTENSIONS:
-        return "text", ""
     if not suffix:
         return "", "Файл без расширения не понимаю. Пришли файл с понятным расширением."
-    return "", f"Формат {suffix} не поддерживается."
+    return "text", ""
 
 
 def safe_attachment_name(name: str) -> str:

@@ -67,8 +67,6 @@ def add_reminder(text: str, minutes: float) -> tuple[dict | None, str]:
         return None, "Пустое напоминание — нечего напоминать."
     if len(cleaned) > MAX_TEXT_CHARS:
         return None, f"Слишком длинный текст: максимум {MAX_TEXT_CHARS} символов."
-    if policy.is_secret_text(cleaned):
-        return None, "Похоже на пароль или ключ. Такое в напоминание не кладу."
     try:
         delay = float(minutes)
     except (TypeError, ValueError):

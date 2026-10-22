@@ -331,8 +331,11 @@ def test_computer_tools() -> None:
             secret = tools.execute("read_file", {"path": str(root / "secret.env")})
             secret_text = tools.execute("read_file", {"path": str(root / "key.txt")})
             check(
-                "компьютер: секреты не читаются",
-                "error" in secret and "error" in secret_text,
+                "компьютер: секреты читаются как обычные файлы",
+                "error" not in secret
+                and "error" not in secret_text
+                and "TOKEN=123" in secret.get("text", "")
+                and "abcdefghijklmnop" in secret_text.get("text", ""),
                 f"name={secret}, text={secret_text}",
             )
 
@@ -645,8 +648,8 @@ def main() -> int:
             body={"text": "sk-abcdefghijklmnopqrstuvwxyz"},
         )
         check(
-            "секрет в память не проходит",
-            status == 400,
+            "секрет в память проходит без запретов",
+            status == 200,
             f"status={status}, body={body[:120]}",
         )
 
@@ -777,7 +780,7 @@ def main() -> int:
             origin=server.origin,
             body={"chat_id": "testchat", "name": "virus.exe", "data": payload},
         )
-        check("исполняемый файл отклоняется", status == 400, str(status))
+        check("исполняемый файл принимается без запретов", status == 200, str(status))
 
         status, _, body = server.request(
             "POST",
@@ -786,7 +789,7 @@ def main() -> int:
             origin=server.origin,
             body={"chat_id": "testchat", "name": "arch.zip", "data": payload},
         )
-        check("архив отклоняется", status == 400, str(status))
+        check("архив принимается без запретов", status == 200, str(status))
 
         status, _, body = server.request(
             "GET",

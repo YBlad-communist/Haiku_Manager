@@ -124,8 +124,6 @@ def read_image(path: str) -> dict:
     target, error = policy.resolve_path(path)
     if error:
         return {"error": error}
-    if policy.is_forbidden(target):
-        return {"error": "Эта папка закрыта для Омеги."}
     if target.suffix.lower() not in IMAGE_EXTENSIONS:
         return {"error": "Нужен файл картинки: png, jpg, bmp, webp или tiff."}
     if not target.is_file():

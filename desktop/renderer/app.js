@@ -117,6 +117,7 @@ const els = {
   promptCounter: document.getElementById("promptCounter"),
   promptReset: document.getElementById("promptReset"),
   policyView: document.getElementById("policyView"),
+  policySection: document.getElementById("policySection"),
   voiceCircle: document.getElementById("voiceCircle"),
   voiceBars: document.getElementById("voiceBars"),
   voiceTitle: document.getElementById("voiceTitle"),
@@ -1016,25 +1017,34 @@ async function uploadAttachment(name, dataBase64) {
   return response.attachment;
 }
 
+let pendingUploads = 0;
+
 async function addFiles(files) {
   const list = Array.from(files || []);
   if (!list.length) {
     return;
   }
-  const room = MAX_ATTACHMENTS - (state.attachments || []).length;
+  const room =
+    MAX_ATTACHMENTS - (state.attachments || []).length - pendingUploads;
   if (room <= 0) {
     showToast(`Больше ${MAX_ATTACHMENTS} вложений в одно сообщение нельзя.`);
     return;
   }
-  for (const file of list.slice(0, room)) {
-    try {
-      const base64 = await fileToBase64(file);
-      const meta = await uploadAttachment(file.name || "файл", base64);
-      state.attachments.push(meta);
-      renderAttachments();
-    } catch (error) {
-      showToast(error.message || `Не удалось прикрепить ${file.name || "файл"}.`);
+  const batch = list.slice(0, room);
+  pendingUploads += batch.length;
+  try {
+    for (const file of batch) {
+      try {
+        const base64 = await fileToBase64(file);
+        const meta = await uploadAttachment(file.name || "файл", base64);
+        state.attachments.push(meta);
+        renderAttachments();
+      } catch (error) {
+        showToast(error.message || `Не удалось прикрепить ${file.name || "файл"}.`);
+      }
     }
+  } finally {
+    pendingUploads -= batch.length;
   }
   if (list.length > room) {
     showToast(`Прикреплено ${room} из ${list.length}: лимит ${MAX_ATTACHMENTS}.`);
@@ -2717,7 +2727,9 @@ async function openSettings() {
     const info = await window.omega.getPromptInfo();
     if (info) {
       state.promptInfo = info;
-      els.policyView.textContent = info.policy || "";
+      const rules = String(info.policy || "");
+      els.policyView.textContent = rules;
+      els.policySection.hidden = !rules;
       els.userPrompt.maxLength = promptLimit();
       updatePromptCounter();
       applyModelNote(settings.model);

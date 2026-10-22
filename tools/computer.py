@@ -1,44 +1,15 @@
 import os
-import re
 import subprocess
 from pathlib import Path
 
 import policy
 
 
+
 MAX_LIST_ENTRIES = 200
 MAX_READ_BYTES = 1_000_000
 MAX_READ_CHARS = 50_000
 MAX_WRITE_CHARS = 200_000
-SECRET_SUFFIXES = (
-    ".pem",
-    ".key",
-    ".pfx",
-    ".p12",
-    ".jks",
-    ".kdbx",
-    ".keystore",
-)
-SECRET_NAMES = {
-    ".env",
-    ".env.local",
-    ".env.production",
-    ".env.development",
-    "id_rsa",
-    "id_dsa",
-    "id_ecdsa",
-    "id_ed25519",
-    "credentials",
-    "secrets",
-    "passwords",
-    "tokens",
-    "api_keys",
-}
-SECRET_DIRS = {".ssh", ".aws", ".azure", ".gnupg"}
-SECRET_CONTENT_RE = re.compile(
-    r"(?i)(api[_-]?key|secret|password|token)\s*[:=]\s*['\"]?[A-Za-z0-9_\-]{16,}"
-)
-PRIVATE_KEY_RE = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
 
 
 COMPUTER_TOOLS = [
@@ -228,22 +199,6 @@ def _resolve_path(value) -> tuple[Path | None, str | None]:
     return path, None
 
 
-def _is_secret(path: Path) -> bool:
-    name = path.name.lower()
-    if name in SECRET_NAMES or name.startswith(".env."):
-        return True
-    if any(part.lower() in SECRET_DIRS for part in path.parts):
-        return True
-    if name.endswith(SECRET_SUFFIXES):
-        return True
-    return any(word in name for word in ("secret", "password", "credential", "api_key"))
-
-
-def _has_secret_text(text: str) -> bool:
-    sample = text[:200_000]
-    return bool(SECRET_CONTENT_RE.search(sample) or PRIVATE_KEY_RE.search(sample))
-
-
 def _as_int(value, default: int, low: int, high: int) -> int:
     try:
         number = int(value)
@@ -260,8 +215,6 @@ def list_files(path: str, limit: int = 100) -> dict:
     target, error = _resolve_path(path)
     if error:
         return {"error": error}
-    if policy.is_forbidden(target):
-        return {"error": "Эта папка закрыта для Омеги."}
     if not target.is_dir():
         return {"error": "Это не папка."}
     limit = _as_int(limit, 100, 1, MAX_LIST_ENTRIES)
@@ -305,12 +258,8 @@ def read_file(path: str, max_chars: int = 12000) -> dict:
     target, error = _resolve_path(path)
     if error:
         return {"error": error}
-    if policy.is_forbidden(target):
-        return {"error": "Этот файл закрыт для Омеги."}
     if not target.is_file():
         return {"error": "Это не файл."}
-    if _is_secret(target):
-        return {"error": "Этот файл похож на секрет. Омега не читает ключи и пароли."}
     try:
         size = target.stat().st_size
     except OSError as exc:
@@ -330,8 +279,6 @@ def read_file(path: str, max_chars: int = 12000) -> dict:
             text = raw.decode("cp1251")
         except UnicodeDecodeError:
             text = raw.decode("utf-8", errors="replace")
-    if _has_secret_text(text):
-        return {"error": "В файле похоже есть ключи или пароли. Читать его нельзя."}
     max_chars = _as_int(max_chars, 12000, 100, MAX_READ_CHARS)
     truncated = len(text) > max_chars
     return {
@@ -346,10 +293,6 @@ def write_file(path: str, text: str, mode: str = "overwrite") -> dict:
     target, error = _resolve_path(path)
     if error:
         return {"error": error}
-    if policy.is_forbidden(target):
-        return {"error": "В эту папку Омега не пишет."}
-    if _is_secret(target):
-        return {"error": "Нельзя записывать файлы с секретами и ключами."}
     if target.exists() and target.is_dir():
         return {"error": "По этому пути уже есть папка."}
     if not target.parent.is_dir():
@@ -381,10 +324,6 @@ def create_folder(path: str) -> dict:
     target, error = _resolve_path(path)
     if error:
         return {"error": error}
-    if policy.is_forbidden(target):
-        return {"error": "В эту папку Омега не пишет."}
-    if _is_secret(target):
-        return {"error": "Нельзя создавать папки для секретов."}
     if target.exists():
         return {"error": "Такая папка или файл уже есть."}
     if not target.parent.is_dir():
@@ -414,10 +353,6 @@ def open_path(path: str) -> dict:
         return {"error": "Такого пути нет."}
     if not target.is_dir():
         return {"error": "open_path открывает только папки. Для файлов используй read_file."}
-    if _is_secret(target):
-        return {"error": "Эту папку открывать нельзя."}
-    if policy.is_forbidden(target):
-        return {"error": "Эта папка закрыта для Омеги."}
     try:
         _start(target)
     except OSError as exc:
@@ -450,8 +385,6 @@ def launch_app(path: str) -> dict:
         return {"error": "Запускать можно только exe или lnk."}
     if policy.is_shell_binary(target):
         return {"error": "Эту программу запускать нельзя."}
-    if _is_secret(target) or policy.is_protected(target):
-        return {"error": "Этот файл заблокирован."}
     if not policy.launch_allowed(target):
         answer = policy.confirm(
             "launch_app",
@@ -484,10 +417,6 @@ def _delete_targets(values) -> tuple[list[Path], str | None]:
         target, error = policy.resolve_path(item)
         if error:
             return [], error
-        if policy.is_forbidden(target):
-            return [], f"Удалять из этой зоны нельзя: {target}"
-        if policy.is_protected(target):
-            return [], f"Это служебный файл Омеги, удалить его нельзя: {target}"
         if not target.exists():
             return [], f"Такого пути нет: {target}"
         if target not in targets:
@@ -548,13 +477,6 @@ def delete_files(paths: list[str]) -> dict:
                 "error": (
                     "Пока ты смотрел окно, объект сменил тип. "
                     "Ничего не удалено, проверь список и повтори."
-                )
-            }
-        if policy.is_forbidden(current) or policy.is_protected(current):
-            return {
-                "error": (
-                    "Пока ты смотрел окно, путь попал в запрещённую зону. "
-                    "Ничего не удалено."
                 )
             }
 
