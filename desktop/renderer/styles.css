@@ -1369,6 +1369,26 @@ textarea.draft {
   line-height: 1.4;
   transform: translateX(-50%);
   box-shadow: 0 8px 24px rgba(43, 42, 61, .28);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.toast-action {
+  flex: 0 0 auto;
+  padding: 5px 12px;
+  border: 1px solid rgba(255, 255, 255, .45);
+  border-radius: 10px;
+  background: transparent;
+  color: #fff;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.toast-action:hover {
+  background: rgba(255, 255, 255, .14);
 }
 
 .recent::-webkit-scrollbar,

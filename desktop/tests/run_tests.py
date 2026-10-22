@@ -33,13 +33,17 @@ def check(name: str, condition: bool, detail: str = "") -> None:
 class Server:
     def __init__(self) -> None:
         self.history_file = Path(tempfile.gettempdir()) / f"omega_history_{os.getpid()}.json"
+        self.trash_file = Path(tempfile.gettempdir()) / f"omega_trash_{os.getpid()}.json"
         if self.history_file.exists():
             self.history_file.unlink()
+        if self.trash_file.exists():
+            self.trash_file.unlink()
         env = {
             **os.environ,
             "OMEGA_TOKEN": TOKEN,
             "OMEGA_TEST_WORKER": "1",
             "OMEGA_HISTORY_FILE": str(self.history_file),
+            "OMEGA_TRASH_FILE": str(self.trash_file),
             "BUDGET_LIMIT_RUB": "500",
             "PYTHONIOENCODING": "utf-8",
             "PYTHONUTF8": "1",
@@ -164,6 +168,8 @@ class Server:
             self.proc.terminate()
         if self.history_file.exists():
             self.history_file.unlink()
+        if self.trash_file.exists():
+            self.trash_file.unlink()
 
 
 def read_events(response):
@@ -690,6 +696,24 @@ def main() -> int:
             status == 200 and len(after_delete.get("history", [])) == 1,
             f"status={status}, history={len(after_delete.get('history', []))}",
         )
+
+        status, _, body = server.request(
+            "POST",
+            f"/api/chats/{chats[0]['id']}/messages/{message_id}/restore",
+            token=TOKEN,
+            origin=server.origin,
+            body={},
+        )
+        status2, _, body = server.request("GET", "/api/chats", token=TOKEN)
+        restored = json.loads(body.decode("utf-8")).get("chats", []) if status2 == 200 else []
+        check(
+            "удалённый ответ возвращается из корзины",
+            status == 200
+            and len(restored) == 1
+            and len(restored[0].get("messages", [])) == 4,
+            f"status={status}, chats={restored}",
+        )
+
         status, _, _ = server.request(
             "DELETE",
             f"/api/chats/{chats[0]['id']}",

@@ -102,6 +102,32 @@ def _settings_path() -> Path:
     return PROJECT_ROOT / "data" / "settings.json"
 
 
+def _trash_path() -> Path:
+    """Корзина удалённых сообщений: их можно вернуть."""
+    override = os.environ.get("OMEGA_TRASH_FILE")
+    return Path(override) if override else PROJECT_ROOT / "data" / "deleted_messages.json"
+
+
+def _load_trash() -> list[dict]:
+    try:
+        data = json.loads(_trash_path().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [item for item in data if isinstance(item, dict)]
+
+
+def _save_trash(items: list[dict]) -> None:
+    path = _trash_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(".tmp")
+    temp.write_text(
+        json.dumps(items[-200:], ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    os.replace(temp, path)
+
+
 def _budget_limit() -> float:
     override = os.environ.get("BUDGET_LIMIT_RUB")
     if override is not None:
@@ -819,6 +845,18 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
             )
             if removed_chat is None:
                 return JSONResponse({"error": "Чат не найден."}, status_code=404)
+            # Сообщения чата тоже уходят в корзину: их можно вернуть по одному.
+            trash = _load_trash()
+            for message in removed_chat.get("messages") or []:
+                trash.append(
+                    {
+                        "chat_id": chat_id,
+                        "message": message,
+                        "deleted_at": _now(),
+                    }
+                )
+            if trash:
+                _save_trash(trash)
             store["chats"] = [
                 chat for chat in store["chats"] if chat.get("id") != chat_id
             ]
@@ -851,6 +889,16 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
             )
             if removed is None:
                 return JSONResponse({"error": "Сообщение не найдено."}, status_code=404)
+            # Удалённое сообщение не пропадает: оно уходит в корзину и его можно вернуть.
+            trash = _load_trash()
+            trash.append(
+                {
+                    "chat_id": chat_id,
+                    "message": removed,
+                    "deleted_at": _now(),
+                }
+            )
+            _save_trash(trash)
             chat["messages"] = [
                 item for item in chat["messages"] if item.get("id") != message_id
             ]
@@ -861,7 +909,44 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
                 ]
             chat["updated_at"] = _now()
             _save_store(store["tasks"], store["chats"])
-        return {"ok": True, "chat": chat}
+        return {"ok": True, "chat": chat, "message_id": message_id}
+
+    @app.post("/api/chats/{chat_id}/messages/{message_id}/restore")
+    async def restore_message(chat_id: str, message_id: str):
+        """Возвращает удалённое сообщение из корзины."""
+        async with app.state.history_lock:
+            trash = _load_trash()
+            index = next(
+                (
+                    position
+                    for position, item in enumerate(trash)
+                    if str(item.get("chat_id")) == chat_id
+                    and str((item.get("message") or {}).get("id")) == message_id
+                ),
+                None,
+            )
+            if index is None:
+                return JSONResponse(
+                    {"error": "Сообщение не найдено в корзине."}, status_code=404
+                )
+            entry = trash.pop(index)
+            _save_trash(trash)
+            message = _clean_message(entry.get("message") or {})
+            if message is None:
+                return JSONResponse(
+                    {"error": "Сообщение не удалось восстановить."}, status_code=400
+                )
+            store = _load_store()
+            chat = next(
+                (item for item in store["chats"] if item.get("id") == chat_id), None
+            )
+            if chat is None:
+                chat = _new_chat("Восстановленная задача")
+                store["chats"].insert(0, chat)
+            chat["messages"].append(message)
+            chat["updated_at"] = _now()
+            _save_store(store["tasks"], store["chats"])
+        return {"ok": True, "chat": chat, "message": message}
 
     @app.post("/api/task")
     async def start_task(payload: TaskIn):

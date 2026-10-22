@@ -387,15 +387,31 @@ function crossIcon() {
   return makeSvg(["M4 4l8 8", "M12 4l-8 8"]);
 }
 
-function showToast(message) {
-  els.toast.textContent = message;
+function showToast(message, action = null) {
+  els.toast.replaceChildren();
+  const text = document.createElement("span");
+  text.textContent = message;
+  els.toast.append(text);
+  if (action && action.label) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "toast-action";
+    button.textContent = action.label;
+    button.addEventListener("click", () => {
+      els.toast.hidden = true;
+      if (typeof action.run === "function") {
+        action.run();
+      }
+    });
+    els.toast.append(button);
+  }
   els.toast.hidden = false;
   if (toastTimer) {
     clearTimeout(toastTimer);
   }
   toastTimer = setTimeout(() => {
     els.toast.hidden = true;
-  }, 2600);
+  }, action ? 9000 : 2600);
 }
 
 function scrollFeed() {
@@ -948,7 +964,7 @@ async function deleteMessage(chatId, messageId) {
     showToast("Сначала дождись конца задачи.");
     return;
   }
-  if (!window.confirm("Удалить эту задачу?")) {
+  if (!window.confirm("Удалить этот ответ? Его можно будет вернуть.")) {
     return;
   }
   try {
@@ -961,9 +977,29 @@ async function deleteMessage(chatId, messageId) {
     if (state.chatId === chatId) {
       showChat(chatId);
     }
-    showToast("Задача удалена.");
+    showToast("Ответ удалён.", {
+      label: "Вернуть",
+      run: () => restoreMessage(chatId, messageId),
+    });
   } catch (error) {
     showToast(error.message || "Не удалось удалить задачу.");
+  }
+}
+
+async function restoreMessage(chatId, messageId) {
+  try {
+    await apiJson(
+      `/api/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}/restore`,
+      { method: "POST", body: "{}" },
+    );
+    await loadChats();
+    await refreshSummary();
+    if (state.chatId === chatId) {
+      showChat(chatId);
+    }
+    showToast("Ответ возвращён.");
+  } catch (error) {
+    showToast(error.message || "Не удалось вернуть ответ.");
   }
 }
 
