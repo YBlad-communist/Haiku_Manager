@@ -57,6 +57,8 @@ const DEFAULTS = {
   voice_language: "ru",
   sales_module: false,
   memory_enabled: true,
+  memory_send_limit: 4000,
+  command_confirm: true,
   model: "claude-haiku-5.5",
   user_prompt: "",
   theme: "light",
@@ -105,6 +107,14 @@ function sanitizeSettings(value, base = DEFAULTS) {
     typeof source.memory_enabled === "boolean"
       ? source.memory_enabled
       : base.memory_enabled !== false;
+  const memorySendLimit = Math.min(
+    20000,
+    Math.max(500, Math.round(Number(source.memory_send_limit) || 4000)),
+  );
+  const commandConfirm =
+    typeof source.command_confirm === "boolean"
+      ? source.command_confirm
+      : base.command_confirm !== false;
   const model = MODEL_IDS.has(source.model)
     ? source.model
     : MODEL_IDS.has(base.model)
@@ -178,6 +188,8 @@ function sanitizeSettings(value, base = DEFAULTS) {
     voice_language: voiceLanguage,
     sales_module: salesModule,
     memory_enabled: memoryEnabled,
+    memory_send_limit: memorySendLimit,
+    command_confirm: commandConfirm,
     model,
     user_prompt: userPrompt,
     theme,

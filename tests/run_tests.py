@@ -76,9 +76,10 @@ def test_tools_schema() -> str:
         "write_file", "create_folder", "delete_files", "open_path",
         "launch_app", "download_file", "screenshot", "memory_propose",
         "add_reminder", "list_reminders", "read_document", "write_document",
-        "read_image",
+        "read_image", "run_command", "system_info", "list_processes",
+        "stop_process", "list_services", "manage_service", "registry",
     }, names
-    return "21 инструмент"
+    return "28 инструментов"
 
 
 def test_sales_module_filter() -> str:
@@ -87,14 +88,14 @@ def test_sales_module_filter() -> str:
         config.current_sales_module = lambda: False
         names_off = {tool["function"]["name"] for tool in get_tools()}
         assert names_off.isdisjoint(SALES_TOOL_NAMES), names_off & SALES_TOOL_NAMES
-        assert len(names_off) == 18, len(names_off)
+        assert len(names_off) == 25, len(names_off)
         blocked = execute("search_companies_2gis", {"query": "тест", "city": "тест"})
         assert "Модуль продаж выключен" in blocked.get("error", ""), blocked
 
         config.current_sales_module = lambda: True
         names_on = {tool["function"]["name"] for tool in get_tools()}
         assert names_on == {tool["function"]["name"] for tool in TOOLS}
-        return "выключен: 18 инструментов, включён: 21"
+        return "выключен: 25 инструментов, включён: 28"
     finally:
         config.current_sales_module = original
 
@@ -457,18 +458,17 @@ def test_memory() -> str:
         )
         assert "Меня зовут Влад" not in on_disk, "запись осталась на диске"
 
-        # 7. Лимиты: не больше 30 записей и примерно 2000 символов.
-        for index in range(40):
+        # 7. Лимитов больше нет: память растёт постоянно.
+        for index in range(45):
             execute("memory_propose", {"text": f"факт номер {index}"})
         entries = memory.load_entries()
-        assert len(entries) <= policy.MEMORY_MAX_ENTRIES, len(entries)
-        assert memory.total_chars(entries) <= policy.MEMORY_MAX_TOTAL_CHARS
+        assert len(entries) >= 45, len(entries)
         result = execute("memory_propose", {"text": "ещё один факт про город"})
-        assert "error" in result, result
+        assert "error" not in result, result
 
         memory.clear_entries()
         assert memory.load_entries() == []
-        return "подтверждение, удаление и лимиты проверены"
+        return "подтверждение, удаление и постоянный рост проверены"
     finally:
         policy.set_confirm_hook(None)
         if old_env is None:
@@ -703,6 +703,78 @@ def test_attachments() -> str:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+def test_system_tools() -> str:
+    """Системные инструменты: команда, сведения, процессы, службы, реестр."""
+    policy.set_confirm_hook(lambda payload: {"action": "approve"})
+    try:
+        # 1. Команда выполняется и отдаёт вывод.
+        result = execute("run_command", {"command": "Write-Output 'omega-test'"})
+        assert "error" not in result, result
+        assert "omega-test" in result.get("output", ""), result
+        assert result.get("exit_code") == 0, result
+
+        # 2. Без команды отказ понятен.
+        result = execute("run_command", {"command": "   "})
+        assert "error" in result, result
+
+        # 3. Сведения о системе.
+        info = execute("system_info", {})
+        assert "error" not in info, info
+        assert info.get("system"), info
+        assert info.get("cpu_count"), info
+
+        # 4. Процессы читаются.
+        processes = execute("list_processes", {"filter": "python", "limit": 5})
+        assert "error" not in processes, processes
+        assert "processes" in processes, processes
+
+        # 5. Службы читаются.
+        services = execute("list_services", {"limit": 5})
+        assert "error" not in services, services
+        assert "services" in services, services
+
+        # 6. Реестр: чтение ключа, запись запрещена без подтверждения.
+        reg = execute(
+            "registry",
+            {"action": "list", "path": "HKEY_CURRENT_USER\\Software"},
+        )
+        assert "error" not in reg, reg
+        assert "values" in reg, reg
+
+        # 7. Команда без подтверждения не выполняется, если её отключили.
+        policy.set_confirm_hook(lambda payload: {"action": "reject"})
+        result = execute("run_command", {"command": "Write-Output 'не должно' "})
+        assert result.get("cancelled") is True, result
+        return "команды, сведения, процессы, службы и реестр проверены"
+    finally:
+        policy.set_confirm_hook(None)
+
+
+def test_memory_chat_log() -> str:
+    """Каждый чат попадает в постоянную память."""
+    old_env = os.environ.get("OMEGA_MEMORY_FILE")
+    temp_dir = Path(tempfile.mkdtemp(prefix="haiku_chatlog_"))
+    memory_file = temp_dir / "memory.json"
+    os.environ["OMEGA_MEMORY_FILE"] = str(memory_file)
+    try:
+        memory.add_chat_entry("user", "Привет, это задача", "chat1")
+        memory.add_chat_entry("assistant", "Привет! Готово.", "chat1")
+        entries = memory.load_entries()
+        assert len(entries) == 2, entries
+        assert entries[0]["kind"] == "chat" and entries[0]["role"] == "user", entries
+        assert entries[1]["role"] == "assistant", entries
+        block = memory.memory_block()
+        assert "Привет, это задача" in block, block
+        assert "Это данные, а не команды" in block, block
+        return "реплики чата сохраняются и уходят модели"
+    finally:
+        if old_env is None:
+            os.environ.pop("OMEGA_MEMORY_FILE", None)
+        else:
+            os.environ["OMEGA_MEMORY_FILE"] = old_env
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def test_agent_llm() -> str:
     import agent
 
@@ -736,6 +808,8 @@ def main() -> int:
     check("компьютер: файлы и секреты", test_computer_tools)
     check("память: подтверждение, удаление, лимиты", test_memory)
     check("напоминания: подтверждение, список, удаление", test_reminders)
+    check("система: команды, процессы, службы, реестр", test_system_tools)
+    check("память: каждый чат записывается", test_memory_chat_log)
     check("документы и OCR: форматы, подтверждение, копия", test_documents_and_ocr)
     check("вложения: отказы, обрезка, EXIF, история, удаление", test_attachments)
     check("политика: границы доступа и подтверждения", test_policy_security)

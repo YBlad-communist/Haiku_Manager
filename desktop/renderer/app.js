@@ -104,6 +104,8 @@ const els = {
   speechRate: document.getElementById("speechRate"),
   speechVolume: document.getElementById("speechVolume"),
   memoryToggle: document.getElementById("memoryToggle"),
+  memoryLimitInput: document.getElementById("memoryLimitInput"),
+  commandConfirmToggle: document.getElementById("commandConfirmToggle"),
   reminderList: document.getElementById("reminderList"),
   reminderEmpty: document.getElementById("reminderEmpty"),
   memoryList: document.getElementById("memoryList"),
@@ -2321,6 +2323,12 @@ function applySettingsToUi() {
   const memoryEnabled = state.settings.memory_enabled !== false;
   els.memoryToggle.setAttribute("aria-checked", String(memoryEnabled));
   els.memoryToggle.classList.toggle("on", memoryEnabled);
+  if (document.activeElement !== els.memoryLimitInput) {
+    els.memoryLimitInput.value = String(state.settings.memory_send_limit ?? 4000);
+  }
+  const commandConfirm = state.settings.command_confirm !== false;
+  els.commandConfirmToggle.setAttribute("aria-checked", String(commandConfirm));
+  els.commandConfirmToggle.classList.toggle("on", commandConfirm);
   const speechEnabled = Boolean(state.settings.speech_enabled);
   els.speechToggle.setAttribute("aria-checked", String(speechEnabled));
   els.speechToggle.classList.toggle("on", speechEnabled);
@@ -2437,7 +2445,9 @@ function renderMemory() {
       text.textContent = item.text || "";
       const date = document.createElement("span");
       date.className = "memory-date";
-      date.textContent = item.date || "";
+      const kind = item.kind === "chat" ? "чат" : "факт";
+      const who = item.role === "user" ? "ты" : item.role === "assistant" ? "омега" : "";
+      date.textContent = [item.date || "", kind, who].filter(Boolean).join(" · ");
       const actions = document.createElement("div");
       actions.className = "memory-actions";
       const edit = document.createElement("button");
@@ -2642,6 +2652,48 @@ async function saveSpeechRange() {
   });
   state.settingsBusy = false;
   if (!ok) {
+    applySettingsToUi();
+  }
+}
+
+async function saveMemoryLimit() {
+  if (!state.settings || state.settingsBusy) {
+    return;
+  }
+  const value = Number(els.memoryLimitInput.value);
+  if (!Number.isFinite(value)) {
+    applySettingsToUi();
+    return;
+  }
+  const limit = Math.max(500, Math.min(20000, Math.round(value)));
+  if (limit === state.settings.memory_send_limit) {
+    return;
+  }
+  state.settingsBusy = true;
+  const ok = await saveSettingsPatch({ memory_send_limit: limit });
+  state.settingsBusy = false;
+  if (!ok) {
+    applySettingsToUi();
+  }
+}
+
+async function toggleCommandConfirm() {
+  if (!state.settings || state.settingsBusy) {
+    return;
+  }
+  state.settingsBusy = true;
+  els.commandConfirmToggle.disabled = true;
+  const desired = !state.settings.command_confirm;
+  const ok = await saveSettingsPatch({ command_confirm: desired });
+  els.commandConfirmToggle.disabled = false;
+  state.settingsBusy = false;
+  if (ok) {
+    showToast(
+      desired
+        ? "Команды будут выполняться без вопроса."
+        : "Перед командами Омега будет спрашивать.",
+    );
+  } else {
     applySettingsToUi();
   }
 }
@@ -3090,6 +3142,8 @@ function bindEvents() {
     await addFiles(event.dataTransfer.files);
   });
   els.memoryToggle.addEventListener("click", toggleMemoryEnabled);
+  els.memoryLimitInput.addEventListener("change", saveMemoryLimit);
+  els.commandConfirmToggle.addEventListener("click", toggleCommandConfirm);
   els.memoryClear.addEventListener("click", clearMemory);
   els.memoryExport.addEventListener("click", exportMemory);
   els.launchToggle.addEventListener("click", toggleLaunchWithoutConfirm);

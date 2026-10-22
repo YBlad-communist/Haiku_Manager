@@ -604,6 +604,9 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
                 chat["title"] = _chat_title(state.task)
             chats.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
             _save_store(tasks, chats)
+            # Каждый чат попадает в постоянную память.
+            memory.add_chat_entry("user", state.task, chat["id"])
+            memory.add_chat_entry("assistant", entry["answer"], chat["id"])
             limit = _budget_limit()
             remaining = max(0.0, limit - _spent_rub(tasks))
             entry["budget_limit"] = limit

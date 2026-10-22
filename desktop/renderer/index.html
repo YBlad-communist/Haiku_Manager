@@ -210,6 +210,28 @@
 
         <section class="setting">
           <div class="setting-text">
+            <h3>Сколько памяти уходит модели</h3>
+            <p>Символов из памяти в каждом запросе. Сама память хранится всегда.</p>
+          </div>
+          <div class="budget-field">
+            <input class="ci budget-input" id="memoryLimitInput" type="number" min="500" max="20000" step="500"
+                   inputmode="numeric" aria-label="Сколько символов памяти уходит модели">
+            <span class="budget-unit">симв.</span>
+          </div>
+        </section>
+
+        <section class="setting">
+          <div class="setting-text">
+            <h3>Выполнять команды без подтверждения</h3>
+            <p>Команды в системе идут от твоего имени. По умолчанию Омега спрашивает.</p>
+          </div>
+          <button type="button" class="switch ci" id="commandConfirmToggle" role="switch" aria-checked="true" aria-label="Спрашивать перед выполнением команд">
+            <span class="switch-knob"></span>
+          </button>
+        </section>
+
+        <section class="setting">
+          <div class="setting-text">
             <h3>Использовать память</h3>
             <p>Омега помнит короткие сведения о тебе и передаёт их модели при каждом запросе.</p>
           </div>

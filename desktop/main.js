@@ -634,6 +634,8 @@ function registerIpc() {
       "voice_language",
       "sales_module",
       "memory_enabled",
+      "memory_send_limit",
+      "command_confirm",
       "model",
       "user_prompt",
       "theme",
