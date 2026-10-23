@@ -183,8 +183,8 @@ TWOGIS_API_KEY = os.environ.get("TWOGIS_API_KEY", "")
 TWOGIS_BASE = "https://catalog.api.2gis.com"
 
 # --- Поиск в интернете ---
-# Провайдера меняем одной строкой: stub или yandex.
-SEARCH_PROVIDER = os.environ.get("SEARCH_PROVIDER", "stub").strip().lower()
+# Провайдер: ddgs (без ключа, по умолчанию) или stub.
+SEARCH_PROVIDER = os.environ.get("SEARCH_PROVIDER", "ddgs").strip().lower()
 YANDEX_SEARCH_API_KEY = os.environ.get("YANDEX_SEARCH_API_KEY", "")
 YANDEX_FOLDER_ID = os.environ.get("YANDEX_FOLDER_ID", "")
 # Регион поиска Яндекса: 225 = Россия, 213 = Москва. Пусто — регион по умолчанию.

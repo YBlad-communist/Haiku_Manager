@@ -7,6 +7,7 @@ import urllib.robotparser
 from html.parser import HTMLParser
 
 import config
+import trafilatura
 from .http import HttpError, download
 
 
@@ -122,15 +123,37 @@ def fetch_page(url: str) -> dict:
         }
 
     html = _decode(page.body, page.headers)
-    extractor = _TextExtractor()
+    title = ""
+    text = ""
     try:
-        extractor.feed(html)
-        extractor.close()
-    except Exception:
-        pass
-
-    text = _clean("".join(extractor.parts))
-    title = _clean("".join(extractor.title_parts))
+        extracted = trafilatura.extract(
+            html,
+            url=page.url,
+            include_comments=False,
+            include_tables=True,
+            favor_recall=True,
+        )
+        if extracted:
+            text = extracted
+    except Exception:  # noqa: BLE001
+        text = ""
+    if not text.strip():
+        extractor = _TextExtractor()
+        try:
+            extractor.feed(html)
+            extractor.close()
+        except Exception:
+            pass
+        text = _clean("".join(extractor.parts))
+        title = _clean("".join(extractor.title_parts))
+    if not title:
+        try:
+            meta = trafilatura.extract_metadata(html, default_url=page.url)
+            if meta is not None:
+                title = str(getattr(meta, "title", "") or "").strip()
+        except Exception:  # noqa: BLE001
+            title = title or ""
+    text = _clean(text)
     truncated = page.truncated or len(text) > config.MAX_FETCH_CHARS
     text = text[: config.MAX_FETCH_CHARS]
 

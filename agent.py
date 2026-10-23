@@ -14,6 +14,7 @@ import memory
 import safety
 from llm import BudgetExceeded, LLM
 from tools import execute, get_tools
+from tools import search_web as search_web_module
 
 
 PROMPT_FILE = Path(config.PROMPT_FILE)
@@ -206,6 +207,7 @@ def run(
 ) -> dict:
     """Выполняет задачу и возвращает итог, число шагов, токены и стоимость."""
     CANCEL.clear()
+    search_web_module.reset_search_counter()
     limit = max(1, int(max_steps or config.MAX_STEPS))
     llm = LLM()
     tool_timeout = config.current_tool_timeout()
