@@ -76,12 +76,22 @@ def total_chars(entries: list[dict]) -> int:
     return sum(len(str(item.get("text") or "")) for item in entries)
 
 
+def trim_entries(entries: list[dict]) -> list[dict]:
+    """Удаляет самые старые записи, пока не выполняются оба лимита сразу."""
+    result = [dict(item) for item in entries]
+    while len(result) > policy.MEMORY_MAX_ENTRIES or total_chars(result) > policy.MEMORY_MAX_TOTAL_CHARS:
+        if not result:
+            break
+        result.pop(0)
+    return result
+
+
 def add_entry(text: str) -> tuple[dict | None, str]:
     """Добавляет факт в память. Возвращает (запись, причина отказа)."""
     cleaned, reason = policy.validate_memory_text(text)
     if reason:
         return None, reason
-    entries = load_entries()
+    entries = trim_entries(load_entries())
     entry = {
         "id": uuid.uuid4().hex[:12],
         "text": cleaned,
@@ -91,16 +101,21 @@ def add_entry(text: str) -> tuple[dict | None, str]:
         "chat_id": "",
     }
     entries.append(entry)
+    entries = trim_entries(entries)
     save_entries(entries)
     return entry, ""
 
 
 def add_chat_entry(role: str, text: str, chat_id: str = "") -> dict | None:
-    """Записывает реплику чата в память. Память постоянная, лимитов нет."""
+    """Записывает реплику чата в память, соблюдая общие лимиты."""
     cleaned = " ".join(str(text or "").split())
     if not cleaned:
         return None
-    entries = load_entries()
+    # Секреты в память чата не пишем.
+    _, reason = policy.validate_memory_text(cleaned[:MAX_CHAT_CHARS])
+    if reason:
+        return None
+    entries = trim_entries(load_entries())
     entry = {
         "id": uuid.uuid4().hex[:12],
         "text": cleaned[:MAX_CHAT_CHARS],
@@ -110,6 +125,7 @@ def add_chat_entry(role: str, text: str, chat_id: str = "") -> dict | None:
         "chat_id": str(chat_id or "")[:40],
     }
     entries.append(entry)
+    entries = trim_entries(entries)
     save_entries(entries)
     return entry
 
@@ -124,7 +140,7 @@ def update_entry(entry_id: str, text: str) -> tuple[dict | None, str]:
     for item in entries:
         if item.get("id") == entry_id:
             item["text"] = cleaned
-            save_entries(entries)
+            save_entries(trim_entries(entries))
             return dict(item), ""
     return None, "Запись не найдена."
 

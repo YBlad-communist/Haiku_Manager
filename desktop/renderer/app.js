@@ -762,6 +762,25 @@ function handleEvent(event) {
     scrollFeed();
     return;
   }
+  if (event.type === "context") {
+    const percent = Math.max(0, Math.min(100, Number(event.percent || 0)));
+    const summaryCost = Number(event.summary_cost || 0);
+    if (currentCard) {
+      const note = document.createElement("p");
+      note.className = "step-note";
+      note.textContent = `Контекст заполнен на ${percent}%`;
+      currentCard.refs.steps.append(note);
+    }
+    if (summaryCost > 0) {
+      showToast(`Выжимка: ${formatCost(summaryCost)}`);
+    }
+    scrollFeed();
+    return;
+  }
+  if (event.type === "toast") {
+    showToast(String(event.text || ""));
+    return;
+  }
   if (event.type === "step") {
     state.maxSteps = Number(event.max_steps || state.maxSteps || 8);
     currentCard.refs.stop.hidden = false;
