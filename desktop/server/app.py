@@ -12,6 +12,7 @@ import shutil
 import socket
 import sys
 import threading
+import time
 import uuid
 from collections import deque
 from contextlib import suppress
@@ -54,6 +55,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 import attachments  # noqa: E402
+import config as omega_config  # noqa: E402
 import memory  # noqa: E402
 import policy  # noqa: E402
 import reminders  # noqa: E402
@@ -76,6 +78,7 @@ class TaskIn(BaseModel):
     task: str = ""
     chat_id: str = ""
     attachments: list[dict] = []
+    over_budget: bool = False
 
 
 class ConfirmIn(BaseModel):
@@ -117,6 +120,10 @@ class TaskState:
     started: bool = False
     remembered: bool = False
     final: dict | None = None
+    started_at: float = 0.0
+    last_tool: str = ""
+    last_tool_started: float = 0.0
+    limit_stopped: bool = False
 
 
 def _history_path() -> Path:
@@ -506,6 +513,101 @@ def _spent_rub(tasks: list[dict]) -> float:
     return total
 
 
+def _spent_today(tasks: list[dict]) -> float:
+    """Расход за сегодня по дате записи задачи (локальное время)."""
+    today = datetime.now().date().isoformat()
+    total = 0.0
+    for item in tasks:
+        stamp = str(item.get("created_at") or "")
+        if not stamp.startswith(today):
+            continue
+        try:
+            total += float(item.get("cost") or 0)
+        except (TypeError, ValueError):
+            continue
+    return total
+
+
+def _run_path() -> Path:
+    override = os.environ.get("OMEGA_RUN_FILE")
+    return Path(override) if override else PROJECT_ROOT / "data" / "run_state.json"
+
+
+def _save_run_state(payload: dict | None) -> None:
+    path = _run_path()
+    try:
+        if payload is None:
+            if path.exists():
+                path.unlink()
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp = path.with_suffix(".tmp")
+        temp.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        os.replace(temp, path)
+    except OSError:
+        pass
+
+
+def _recover_interrupted() -> None:
+    """После падения сервера задача не должна висеть вечным спиннером."""
+    path = _run_path()
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        if path.exists():
+            with suppress(OSError):
+                path.unlink()
+        return
+    if not isinstance(state, dict):
+        with suppress(OSError):
+            path.unlink()
+        return
+    chat_id = str(state.get("chat_id") or "")
+    if chat_id:
+        store = _load_store()
+        chat = next(
+            (item for item in store["chats"] if item.get("id") == chat_id), None
+        )
+        if chat is not None:
+            stamp = _now()
+            message_id = uuid.uuid4().hex[:12]
+            answer = (
+                "Задача прервана: приложение закрылось или сервер перезапустился. "
+                "Повтори задачу, если нужно."
+            )
+            entry = {
+                "id": uuid.uuid4().hex[:10],
+                "created_at": stamp,
+                "chat_id": chat_id,
+                "task": str(state.get("task") or ""),
+                "answer": answer,
+                "steps": 0,
+                "tokens": 0,
+                "cost": 0.0,
+                "stopped_reason": "interrupted",
+            }
+            store["tasks"].insert(0, entry)
+            chat["messages"].append(
+                {
+                    "id": message_id,
+                    "role": "assistant",
+                    "text": answer,
+                    "created_at": stamp,
+                    "steps": 0,
+                    "tokens": 0,
+                    "cost": 0.0,
+                    "stopped_reason": "interrupted",
+                    "task_id": entry["id"],
+                }
+            )
+            chat["updated_at"] = stamp
+            _save_store(store["tasks"], store["chats"])
+    with suppress(OSError):
+        path.unlink()
+
+
 def _format_sse(event: dict) -> str:
     name = str(event.get("type") or "message")
     data = json.dumps(event, ensure_ascii=False, default=str)
@@ -556,6 +658,9 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
     app.state.active_lock = asyncio.Lock()
     app.state.history_lock = asyncio.Lock()
     app.state.transcribe_lock = asyncio.Lock()
+    app.state.last_model_ok = 0.0
+    app.state.started_at = time.time()
+    _recover_interrupted()
 
     async def remember(state: TaskState) -> dict:
         usage = state.last_usage or {}
@@ -612,6 +717,7 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
             entry["budget_limit"] = limit
             entry["remaining_rub"] = remaining
         state.remembered = True
+        _save_run_state(None)
         if state.final is not None:
             state.final["remaining_rub"] = remaining
             state.final["chat_id"] = chat["id"]
@@ -641,19 +747,38 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
             }
             with suppress(Exception):
                 await remember(state)
+        _save_run_state(None)
         async with app.state.active_lock:
             if app.state.active is state:
                 app.state.active = None
+
+    def pulse(state: TaskState) -> dict:
+        elapsed = int(max(0.0, time.monotonic() - state.started_at))
+        tool = state.last_tool
+        tool_seconds = (
+            int(max(0.0, time.monotonic() - state.last_tool_started))
+            if tool and state.last_tool_started
+            else 0
+        )
+        return {
+            "type": "pulse",
+            "elapsed": elapsed,
+            "step": state.last_step,
+            "max_steps": int(os.environ.get("MAX_STEPS", "8")),
+            "tool": tool,
+            "tool_seconds": tool_seconds,
+        }
 
     async def events(state: TaskState):
         assert state.proc is not None and state.proc.stdout is not None
         while True:
             try:
                 line = await asyncio.wait_for(
-                    state.proc.stdout.readline(), timeout=15
+                    state.proc.stdout.readline(), timeout=1.0
                 )
             except asyncio.TimeoutError:
-                yield {"type": "ping"}
+                # Пульс каждую секунду: окно всегда знает, что задача жива.
+                yield pulse(state)
                 continue
             if not line:
                 return
@@ -671,6 +796,15 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
                     state.last_step = int(event.get("step") or 0)
             elif kind == "usage":
                 state.last_usage = event
+                app.state.last_model_ok = time.time()
+            elif kind == "thinking":
+                app.state.last_model_ok = time.time()
+            elif kind == "tool":
+                state.last_tool = str(event.get("name") or "")
+                state.last_tool_started = time.monotonic()
+            elif kind == "tool_result":
+                state.last_tool = ""
+                state.last_tool_started = 0.0
             elif kind == "final":
                 state.pending_id = None
                 state.final = event
@@ -698,6 +832,14 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
             stderr=asyncio.subprocess.PIPE,
         )
         state.started = True
+        state.started_at = time.monotonic()
+        _save_run_state(
+            {
+                "chat_id": state.chat_id,
+                "task": state.task,
+                "started_at": _now(),
+            }
+        )
         state.stderr_task = asyncio.create_task(
             _drain_stderr(state.proc.stderr, state.stderr)
         )
@@ -761,6 +903,36 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
                     async with app.state.active_lock:
                         if app.state.active is state:
                             app.state.active = None
+                elif event.get("type") == "usage" and not state.limit_stopped:
+                    limit = omega_config.current_daily_limit()
+                    if limit > 0:
+                        tasks = _load_store()["tasks"]
+                        cost = float(state.last_usage.get("cost") or 0)
+                        if _spent_today(tasks) + cost >= limit:
+                            state.limit_stopped = True
+                            state.stopped = True
+                            with suppress(Exception):
+                                await _write_command(
+                                    state.proc, {"type": "cancel"}
+                                )
+                            await _terminate(state.proc)
+                            state.final = {
+                                "type": "final",
+                                "answer": (
+                                    "Остановился: дневной лимит расходов "
+                                    f"({limit:.2f} ₽) израсходован. "
+                                    "Нажми «Продолжить», если хочешь поднять лимит."
+                                ),
+                                "steps": int(state.last_usage.get("step") or 0),
+                                "tokens": int(state.last_usage.get("tokens") or 0),
+                                "cost": cost,
+                                "stopped_reason": "daily_limit",
+                            }
+                            with suppress(Exception):
+                                await remember(state)
+                            yield _format_sse(event)
+                            yield _format_sse(state.final)
+                            return
                 yield _format_sse(event)
 
             if state.final is None:
@@ -806,7 +978,15 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
 
     @app.get("/api/health")
     async def health():
-        return {"ok": True, "version": "0.4"}
+        now = time.time()
+        last_ok = float(app.state.last_model_ok or 0)
+        return {
+            "ok": True,
+            "version": "0.5",
+            "model": omega_config.current_model(),
+            "model_ok": bool(last_ok and now - last_ok < 15 * 60),
+            "uptime": int(max(0.0, now - app.state.started_at)),
+        }
 
     @app.get("/api/screenshot")
     async def screenshot(name: str = ""):
@@ -910,11 +1090,22 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
             }
             for chat in store["chats"]
         ]
+        info = omega_config.model_info()
         return {
             "budget_limit": round(limit, 2),
             "spent": round(spent, 2),
+            "spent_today": round(_spent_today(tasks), 2),
+            "daily_limit": round(omega_config.current_daily_limit(), 2),
             "remaining_rub": round(max(0.0, limit - spent), 2),
             "max_steps": int(os.environ.get("MAX_STEPS", "8")),
+            "stall_seconds": omega_config.current_stall_seconds(),
+            "model_timeout": omega_config.current_model_timeout(),
+            "tool_timeout": omega_config.current_tool_timeout(),
+            "model": omega_config.current_model(),
+            "model_label": str(info.get("label") or ""),
+            "stream": bool(
+                omega_config.current_stream_enabled() and info.get("stream")
+            ),
             "history": tasks[:30],
             "chats": chats,
         }
@@ -1205,6 +1396,23 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
                 {"error": "Задача слишком длинная (максимум 4000 символов)."},
                 status_code=400,
             )
+        day_limit = omega_config.current_daily_limit()
+        if day_limit > 0 and not payload.over_budget:
+            spent_today = _spent_today(_load_store()["tasks"])
+            if spent_today >= day_limit:
+                return JSONResponse(
+                    {
+                        "error": (
+                            "Дневной лимит расходов "
+                            f"({day_limit:.2f} ₽) уже израсходован: сегодня потрачено "
+                            f"{spent_today:.2f} ₽."
+                        ),
+                        "code": "daily_limit",
+                        "spent_today": round(spent_today, 2),
+                        "daily_limit": round(day_limit, 2),
+                    },
+                    status_code=409,
+                )
         async with app.state.active_lock:
             if app.state.active is not None:
                 return JSONResponse(
@@ -1279,6 +1487,13 @@ def create_app(token: str, port: int, test_worker: bool = False) -> FastAPI:
             return {"ok": False, "note": "Нет активной задачи."}
         state.stopped = True
         state.pending_id = None
+        # Сначала просим цикл остановиться сам, чтобы он успел написать «остановлено».
+        with suppress(Exception):
+            await _write_command(state.proc, {"type": "cancel"})
+        for _ in range(15):
+            if state.final is not None:
+                return {"ok": True}
+            await asyncio.sleep(0.1)
         await _terminate(state.proc)
         return {"ok": True}
 

@@ -68,6 +68,11 @@ const DEFAULTS = {
   speech_voice: "",
   speech_rate: 1,
   speech_volume: 1,
+  stall_seconds: 20,
+  model_timeout: 60,
+  tool_timeout: 30,
+  daily_limit_rub: 0,
+  stream_enabled: true,
 };
 
 function settingsPath(projectRoot) {
@@ -163,6 +168,33 @@ function sanitizeSettings(value, base = DEFAULTS) {
     1,
     Math.max(0, Math.round(Number(source.speech_volume) * 100) / 100),
   );
+  const clamp = (value, low, high, fallback) => {
+    const number = Number(value);
+    if (!Number.isFinite(number)) {
+      return fallback;
+    }
+    return Math.min(high, Math.max(low, number));
+  };
+  const stallSeconds = Math.round(
+    clamp(source.stall_seconds, 5, 120, Number(base.stall_seconds) || 20),
+  );
+  const modelTimeout = Math.round(
+    clamp(source.model_timeout, 5, 600, Number(base.model_timeout) || 60),
+  );
+  const toolTimeout = Math.round(
+    clamp(source.tool_timeout, 5, 600, Number(base.tool_timeout) || 30),
+  );
+  let dailyLimit = clamp(
+    source.daily_limit_rub,
+    0,
+    1_000_000,
+    Number(base.daily_limit_rub) || 0,
+  );
+  dailyLimit = Math.round(dailyLimit * 100) / 100;
+  const streamEnabled =
+    typeof source.stream_enabled === "boolean"
+      ? source.stream_enabled
+      : base.stream_enabled !== false;
   const allowedApps = [];
   const sourceApps = Array.isArray(source.allowed_apps)
     ? source.allowed_apps
@@ -199,6 +231,11 @@ function sanitizeSettings(value, base = DEFAULTS) {
     speech_voice: speechVoice,
     speech_rate: speechRate,
     speech_volume: Number.isFinite(speechVolume) ? speechVolume : 1,
+    stall_seconds: stallSeconds,
+    model_timeout: modelTimeout,
+    tool_timeout: toolTimeout,
+    daily_limit_rub: dailyLimit,
+    stream_enabled: streamEnabled,
   };
 }
 

@@ -121,6 +121,14 @@ let apiBase = "";
 let isQuitting = false;
 let shutdownPromise = null;
 let currentHotkey = "";
+let restartAttempts = 0;
+const MAX_RESTARTS = 3;
+const TRAY_ICONS = {
+  idle: path.join(__dirname, "assets", "tray-state-idle.png"),
+  working: path.join(__dirname, "assets", "tray-state-working.png"),
+  attention: path.join(__dirname, "assets", "tray-state-attention.png"),
+};
+let trayState = "idle";
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -201,15 +209,61 @@ function startServer() {
         reject(new Error(`Python-сервер завершился с кодом ${code}.`));
         return;
       }
-      if (!isQuitting && mainWindow) {
-        dialog.showErrorBox(
-          "Сервер остановился",
-          `Python-сервер завершился с кодом ${code}. Приложение будет закрыто.`,
-        );
-        requestQuit();
+      if (!isQuitting) {
+        restartServer(code).catch((error) => {
+          console.error("Не удалось перезапустить сервер:", error.message);
+        });
       }
     });
   });
+}
+
+function sendServerStatus(status, message) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("server-status", { status, message });
+  }
+}
+
+async function restartServer(code) {
+  if (isQuitting) {
+    return;
+  }
+  if (restartAttempts >= MAX_RESTARTS) {
+    sendServerStatus(
+      "failed",
+      "Сервер не удалось перезапустить. Перезапусти Омегу вручную.",
+    );
+    dialog.showErrorBox(
+      "Сервер остановился",
+      `Python-сервер завершился с кодом ${code} и не перезапустился ` +
+        `после ${MAX_RESTARTS} попыток.`,
+    );
+    requestQuit();
+    return;
+  }
+  restartAttempts += 1;
+  sendServerStatus(
+    "restarting",
+    `Сервер перезапускается (попытка ${restartAttempts} из ${MAX_RESTARTS})…`,
+  );
+  await sleep(1000 * restartAttempts);
+  if (isQuitting) {
+    return;
+  }
+  try {
+    const port = await startServer();
+    apiBase = `http://127.0.0.1:${port}`;
+    await waitForServer();
+    restartAttempts = 0;
+    sendServerStatus("ready", "Сервер снова работает.");
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.loadURL(`${apiBase}/index.html`);
+    }
+    startReminderWatch();
+  } catch (error) {
+    console.error("Перезапуск сервера не удался:", error.message);
+    await restartServer(code);
+  }
 }
 
 async function waitForServer() {
@@ -542,19 +596,58 @@ function startReminderWatch() {
   }, 5000);
 }
 
+function setTrayState(next) {
+  const state = ["idle", "working", "attention"].includes(next) ? next : "idle";
+  trayState = state;
+  if (!tray) {
+    return;
+  }
+  const image = nativeImage.createFromPath(TRAY_ICONS[state]);
+  if (!image.isEmpty()) {
+    tray.setImage(image);
+  }
+  const labels = {
+    idle: "ждёт задачу",
+    working: "работает",
+    attention: "нужно внимание",
+  };
+  tray.setToolTip(`Омега (Ω) — ${labels[state]}`);
+}
+
 function createTray() {
-  const iconPath = path.join(__dirname, "assets", "tray-32.png");
-  let image = nativeImage.createFromPath(iconPath);
+  let image = nativeImage.createFromPath(TRAY_ICONS.idle);
   if (image.isEmpty()) {
-    image = nativeImage.createFromPath(
-      path.join(__dirname, "assets", "icon.ico"),
-    );
+    image = nativeImage.createFromPath(path.join(__dirname, "assets", "tray-32.png"));
+  }
+  if (image.isEmpty()) {
+    image = nativeImage.createFromPath(path.join(__dirname, "assets", "icon.ico"));
   }
   tray = new Tray(image);
-  tray.setToolTip("Омега (Ω)");
+  setTrayState("idle");
   tray.on("click", () => showWindow());
   tray.on("double-click", () => showWindow());
   updateTrayMenu();
+}
+
+function showAppNotification(payload) {
+  if (!Notification.isSupported() || !payload || typeof payload !== "object") {
+    return false;
+  }
+  const force = Boolean(payload.force);
+  if (!force && mainWindow && mainWindow.isVisible()) {
+    return false;
+  }
+  const body = String(payload.body || "").slice(0, 240);
+  if (!body) {
+    return false;
+  }
+  const notification = new Notification({
+    title: String(payload.title || "Омега").slice(0, 60),
+    body,
+  });
+  notification.on("click", () => showWindow(false));
+  notification.show();
+  return true;
 }
 
 function isHttpUrl(value) {
@@ -645,6 +738,11 @@ function registerIpc() {
       "speech_voice",
       "speech_rate",
       "speech_volume",
+      "stall_seconds",
+      "model_timeout",
+      "tool_timeout",
+      "daily_limit_rub",
+      "stream_enabled",
     ]) {
       if (Object.prototype.hasOwnProperty.call(patch, key)) {
         allowed[key] = patch[key];
@@ -660,6 +758,21 @@ function registerIpc() {
     }
     const text = clipboard.readText() || "";
     return { text: text.slice(0, 20000), length: text.length };
+  });
+
+  ipcMain.handle("omega:tray-state", (event, value) => {
+    if (mainWindow && event.sender !== mainWindow.webContents) {
+      return false;
+    }
+    setTrayState(String(value || "idle"));
+    return true;
+  });
+
+  ipcMain.handle("omega:notify", (event, payload) => {
+    if (mainWindow && event.sender !== mainWindow.webContents) {
+      return false;
+    }
+    return showAppNotification(payload);
   });
 
   ipcMain.handle("omega:prompt-info", (event) => {
@@ -778,6 +891,7 @@ if (!gotLock) {
       const port = await startServer();
       apiBase = `http://127.0.0.1:${port}`;
       await waitForServer();
+      restartAttempts = 0;
       createWindow();
       createTray();
       startReminderWatch();

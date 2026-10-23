@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="styles.css">
   <script src="vendor/markdown-it.min.js" defer></script>
   <script src="vendor/purify.min.js" defer></script>
+  <script src="liveness.js" defer></script>
   <script src="app.js" defer></script>
 </head>
 <body>
@@ -33,6 +34,18 @@
     </aside>
 
     <main class="main">
+      <div class="live-pill ci" id="liveStatus" role="status" aria-live="polite" hidden>
+        <span class="live-dot" aria-hidden="true"></span>
+        <span id="liveText">Работаю…</span>
+      </div>
+      <div class="stall-banner" id="stallBanner" role="alert" hidden>
+        <p class="stall-text" id="stallText">Кажется, завис: сигналов нет дольше 20 секунд.</p>
+        <div class="stall-actions">
+          <button type="button" class="ci btn" id="stallWait">Подождать</button>
+          <button type="button" class="ci btn stall-stop" id="stallStop">Остановить</button>
+          <button type="button" class="ci btn" id="stallRetry">Повторить</button>
+        </div>
+      </div>
       <section class="feed" id="feed" aria-live="polite" aria-label="Лента сообщений"></section>
       <form class="composer cl" id="composer">
         <div class="attach-bar" id="attachBar" aria-label="Вложения"></div>
@@ -63,6 +76,15 @@
           </svg>
         </button>
       </form>
+      <footer class="status-bar ci" id="statusBar" aria-live="polite" aria-label="Состояние Омеги">
+        <span class="status-item" id="statusServer">
+          <span class="status-led" id="statusServerLed" aria-hidden="true"></span>
+          <span id="statusServerText">Сервер: проверяю…</span>
+        </span>
+        <span class="status-item" id="statusModel">Модель: —</span>
+        <span class="status-item" id="statusBudget">Бюджет: —</span>
+        <span class="status-item" id="statusToday">Сегодня: —</span>
+      </footer>
     </main>
   </div>
 
@@ -136,6 +158,64 @@
                    inputmode="decimal" aria-label="Лимит бюджета в рублях">
             <span class="budget-unit">₽</span>
           </div>
+        </section>
+
+        <section class="setting">
+          <div class="setting-text">
+            <h3>Дневной лимит</h3>
+            <p>Сколько рублей можно потратить за день. 0 — без дневного лимита.</p>
+          </div>
+          <div class="budget-field">
+            <input class="ci budget-input" id="dailyLimitInput" type="number" min="0" max="1000000" step="10"
+                   inputmode="decimal" aria-label="Дневной лимит в рублях">
+            <span class="budget-unit">₽/день</span>
+          </div>
+        </section>
+
+        <section class="setting">
+          <div class="setting-text">
+            <h3>Считать зависанием</h3>
+            <p>Если сигналов от сервера нет дольше этого времени, появится полоса «Кажется, завис».</p>
+          </div>
+          <div class="budget-field">
+            <input class="ci budget-input" id="stallInput" type="number" min="5" max="120" step="5"
+                   inputmode="numeric" aria-label="Секунд до предупреждения о зависании">
+            <span class="budget-unit">сек</span>
+          </div>
+        </section>
+
+        <section class="setting">
+          <div class="setting-text">
+            <h3>Таймаут ответа модели</h3>
+            <p>Сколько секунд ждать ответа, прежде чем сообщить об ошибке.</p>
+          </div>
+          <div class="budget-field">
+            <input class="ci budget-input" id="modelTimeoutInput" type="number" min="5" max="600" step="5"
+                   inputmode="numeric" aria-label="Таймаут ответа модели в секундах">
+            <span class="budget-unit">сек</span>
+          </div>
+        </section>
+
+        <section class="setting">
+          <div class="setting-text">
+            <h3>Таймаут инструмента</h3>
+            <p>Инструмент, который не ответил за это время, прерывается с понятной ошибкой.</p>
+          </div>
+          <div class="budget-field">
+            <input class="ci budget-input" id="toolTimeoutInput" type="number" min="5" max="600" step="5"
+                   inputmode="numeric" aria-label="Таймаут инструмента в секундах">
+            <span class="budget-unit">сек</span>
+          </div>
+        </section>
+
+        <section class="setting">
+          <div class="setting-text">
+            <h3>Потоковый ответ</h3>
+            <p>Текст появляется по мере генерации. Если модель не поддерживает поток, ответ придёт целиком.</p>
+          </div>
+          <button type="button" class="switch ci" id="streamToggle" role="switch" aria-checked="true" aria-label="Потоковый ответ">
+            <span class="switch-knob"></span>
+          </button>
         </section>
 
         <section class="setting">

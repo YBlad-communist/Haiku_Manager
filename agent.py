@@ -4,6 +4,7 @@
 
 import base64
 import json
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,49 @@ from tools import execute, get_tools
 
 PROMPT_FILE = Path(config.PROMPT_FILE)
 TIME_HEADER = "--- ТЕКУЩЕЕ ВРЕМЯ ---"
+CANCEL = threading.Event()
+
+
+class Cancelled(Exception):
+    """Пользователь остановил задачу."""
+
+
+def cancel() -> None:
+    """Просит цикл остановиться после текущего безопасного шага."""
+    CANCEL.set()
+
+
+def _check_cancel() -> None:
+    if CANCEL.is_set():
+        raise Cancelled()
+
+
+def _execute_with_timeout(name: str, arguments: dict, timeout: int) -> dict:
+    """Запускает инструмент и не даёт ему подвесить задачу навсегда."""
+    box: dict[str, Any] = {}
+
+    def runner() -> None:
+        try:
+            box["value"] = execute(name, arguments)
+        except BaseException as exc:  # noqa: BLE001 — вернём модели понятную ошибку
+            box["problem"] = exc
+
+    thread = threading.Thread(target=runner, name=f"tool-{name}", daemon=True)
+    thread.start()
+    thread.join(timeout)
+    if thread.is_alive():
+        safety.log_event("tool_timeout", tool=name, seconds=timeout)
+        return {
+            "error": (
+                f"Инструмент {name} не ответил за {timeout} секунд и был прерван. "
+                "Попробуй другой способ или сообщи Владу."
+            ),
+            "timeout": True,
+        }
+    if "problem" in box:
+        raise box["problem"]
+    value = box.get("value")
+    return value if isinstance(value, dict) else {"result": value}
 
 
 def load_system_prompt(path: Path = PROMPT_FILE) -> str:
@@ -161,8 +205,10 @@ def run(
     chat_id: str = "",
 ) -> dict:
     """Выполняет задачу и возвращает итог, число шагов, токены и стоимость."""
+    CANCEL.clear()
     limit = max(1, int(max_steps or config.MAX_STEPS))
     llm = LLM()
+    tool_timeout = config.current_tool_timeout()
     messages: list[dict[str, Any]] = [
         {
             "role": "system",
@@ -196,9 +242,11 @@ def run(
     try:
         for step in range(1, limit + 1):
             steps = step
+            _check_cancel()
             if verbose:
                 print(f"[шаг {step}] думаю...")
             response = llm.chat(messages, tools=available_tools)
+            _check_cancel()
             message = response.choices[0].message
             finish_reason = response.choices[0].finish_reason
 
@@ -213,8 +261,25 @@ def run(
                     print("\n--- ОТВЕТ ---")
                 break
 
-            messages.append(message)
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": message.content or "",
+                    "tool_calls": [
+                        {
+                            "id": call.id,
+                            "type": "function",
+                            "function": {
+                                "name": call.function.name,
+                                "arguments": call.function.arguments or "{}",
+                            },
+                        }
+                        for call in message.tool_calls
+                    ],
+                }
+            )
             for call in message.tool_calls:
+                _check_cancel()
                 name = call.function.name
                 raw_args = call.function.arguments or "{}"
                 parse_error = ""
@@ -244,7 +309,8 @@ def run(
                             f"{config.MAX_TOKENS_PER_REPLY}. Сократи объём одного вызова."
                         )
                 else:
-                    result = execute(name, arguments)
+                    result = _execute_with_timeout(name, arguments, tool_timeout)
+                    _check_cancel()
                 payload = json.dumps(result, ensure_ascii=False, default=str)
 
                 suspicious = safety.detect_injection(payload)
@@ -297,10 +363,15 @@ def run(
                     ),
                 }
             )
+            _check_cancel()
             response = llm.chat(messages, tools=None)
             answer = (response.choices[0].message.content or "").strip()
             steps += 1
 
+    except Cancelled:
+        stopped_reason = "cancelled"
+        safety.log_event("agent_cancelled", step=steps)
+        answer = "Остановлено пользователем."
     except BudgetExceeded as exc:
         stopped_reason = "budget"
         safety.log_event("budget_stop", total_tokens=llm.total_tokens)

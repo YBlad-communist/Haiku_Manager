@@ -3,6 +3,7 @@
 # Отдельный процесс нужен, чтобы кнопка «Стоп» могла жёстко прервать задачу.
 
 import json
+import os
 import queue
 import sys
 import threading
@@ -59,6 +60,9 @@ def _read_commands() -> None:
             except json.JSONDecodeError:
                 continue
             if isinstance(command, dict):
+                if command.get("type") == "cancel":
+                    agent.cancel()
+                    continue
                 COMMANDS.put(command)
     finally:
         COMMANDS.put({"type": "shutdown"})
@@ -212,13 +216,29 @@ def ui_execute(name: str, arguments: dict) -> dict:
     safe_args = json.dumps(
         safety.redact_obj(arguments), ensure_ascii=False, default=str
     )
-    emit({"type": "tool", "name": name, "args": _short(safe_args, 400)})
+    started = time.monotonic()
+    emit(
+        {
+            "type": "tool",
+            "name": name,
+            "args": _short(safe_args, 400),
+            "started_at": round(time.time(), 3),
+        }
+    )
     result = _ORIGINAL_EXECUTE(name, arguments)
     ok = isinstance(result, dict) and "error" not in result
     summary = (
         agent._summary(result) if isinstance(result, dict) else _short(str(result), 300)
     )
-    emit({"type": "tool_result", "name": name, "ok": ok, "summary": summary})
+    emit(
+        {
+            "type": "tool_result",
+            "name": name,
+            "ok": ok,
+            "summary": summary,
+            "duration": round(time.monotonic() - started, 2),
+        }
+    )
     if name == "screenshot" and isinstance(result, dict) and result.get("file"):
         emit(
             {
@@ -238,15 +258,33 @@ _ORIGINAL_CHAT = llm.LLM.chat
 
 
 def ui_chat(self, *args, **kwargs):
-    """Перед вызовом модели сообщаем номер шага, после — токены и цену."""
+    """Перед вызовом модели сообщаем номер шага, после — токены, цену и время."""
+    started = time.monotonic()
     emit(
         {
             "type": "step",
             "step": self.calls + 1,
             "max_steps": config.MAX_STEPS,
+            "started_at": round(time.time(), 3),
         }
     )
-    response = _ORIGINAL_CHAT(self, *args, **kwargs)
+    emit(
+        {
+            "type": "thinking",
+            "step": self.calls + 1,
+            "max_steps": config.MAX_STEPS,
+        }
+    )
+
+    def emit_delta(text: str) -> None:
+        if text:
+            emit({"type": "delta", "text": text})
+
+    self.on_delta = emit_delta
+    try:
+        response = _ORIGINAL_CHAT(self, *args, **kwargs)
+    finally:
+        self.on_delta = None
     emit(
         {
             "type": "usage",
@@ -254,6 +292,8 @@ def ui_chat(self, *args, **kwargs):
             "cost": round(self.total_cost, 4),
             "step": self.calls,
             "max_steps": config.MAX_STEPS,
+            "duration": round(time.monotonic() - started, 2),
+            "streamed": bool(getattr(self, "streamed", False)),
         }
     )
     return response
@@ -294,7 +334,24 @@ def run_task(
 
 def selftest() -> None:
     """Проверка протокола без модели и без денег."""
-    emit({"type": "step", "step": 1, "max_steps": config.MAX_STEPS})
+    emit(
+        {
+            "type": "step",
+            "step": 1,
+            "max_steps": config.MAX_STEPS,
+            "started_at": round(time.time(), 3),
+        }
+    )
+    emit({"type": "thinking", "step": 1, "max_steps": config.MAX_STEPS})
+    if os.environ.get("OMEGA_TEST_CRASH") == "1":
+        time.sleep(0.4)
+        sys.stderr.write("тестовый обрыв воркера\n")
+        sys.stderr.flush()
+        os._exit(3)
+    if os.environ.get("OMEGA_TEST_STALL") == "1":
+        # Молчим, как зависший инструмент: сервер должен слать пульс сам.
+        seconds = float(os.environ.get("OMEGA_TEST_STALL_SECONDS", "8"))
+        time.sleep(max(1.0, seconds))
     emit(
         {
             "type": "tool",

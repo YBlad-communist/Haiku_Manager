@@ -40,6 +40,17 @@ const state = {
   voiceAbort: null,
   voices: [],
   speaking: false,
+  lastPulseAt: 0,
+  stallSeconds: 20,
+  watchdog: null,
+  lastTask: "",
+  lastAttachments: [],
+  cardStartedAt: 0,
+  streamBuffer: "",
+  serverReady: true,
+  statusTimer: null,
+  dailyLimit: 0,
+  statusBusy: false,
 };
 
 let currentCard = null;
@@ -129,6 +140,23 @@ const els = {
   voiceStop: document.getElementById("voiceStop"),
   voiceRetry: document.getElementById("voiceRetry"),
   voiceCancel: document.getElementById("voiceCancel"),
+  liveStatus: document.getElementById("liveStatus"),
+  liveText: document.getElementById("liveText"),
+  stallBanner: document.getElementById("stallBanner"),
+  stallText: document.getElementById("stallText"),
+  stallWait: document.getElementById("stallWait"),
+  stallStop: document.getElementById("stallStop"),
+  stallRetry: document.getElementById("stallRetry"),
+  statusServer: document.getElementById("statusServerText"),
+  statusServerLed: document.getElementById("statusServerLed"),
+  statusModel: document.getElementById("statusModel"),
+  statusBudget: document.getElementById("statusBudget"),
+  statusToday: document.getElementById("statusToday"),
+  dailyLimitInput: document.getElementById("dailyLimitInput"),
+  stallInput: document.getElementById("stallInput"),
+  modelTimeoutInput: document.getElementById("modelTimeoutInput"),
+  toolTimeoutInput: document.getElementById("toolTimeoutInput"),
+  streamToggle: document.getElementById("streamToggle"),
 };
 
 const PROMPT_LIMIT = 4000;
@@ -625,7 +653,7 @@ function createAssistantCard(title = "Работаю над задачей") {
   return { refs, pending: [], finalReceived: false };
 }
 
-function setStepStatus(step, status, text) {
+function setStepStatus(step, status, text, duration) {
   step.icon.className = `step-icon ${status}`;
   step.icon.replaceChildren();
   if (status === "success") {
@@ -637,13 +665,17 @@ function setStepStatus(step, status, text) {
     dot.className = "dot";
     step.icon.append(dot);
   }
+  if (Number.isFinite(Number(duration))) {
+    step.duration = Number(duration);
+  }
   if (text !== undefined) {
-    step.sub.textContent = text;
-    step.sub.hidden = !text;
+    const suffix = step.duration ? ` · ${step.duration.toFixed(1)} с` : "";
+    step.sub.textContent = `${text}${suffix}`;
+    step.sub.hidden = !step.sub.textContent;
   }
 }
 
-function addPendingStep(label) {
+function addPendingStep(label, args = "") {
   if (!currentCard) {
     return;
   }
@@ -665,10 +697,20 @@ function addPendingStep(label) {
   sub.className = "step-sub";
   sub.hidden = true;
   body.append(text, sub);
+  if (args) {
+    const details = document.createElement("details");
+    details.className = "step-details";
+    const summary = document.createElement("summary");
+    summary.textContent = "Детали";
+    const pre = document.createElement("pre");
+    pre.textContent = args;
+    details.append(summary, pre);
+    body.append(details);
+  }
   row.append(icon, body);
 
   currentCard.refs.steps.append(row);
-  const step = { row, icon, sub };
+  const step = { row, icon, sub, startedAt: Date.now() };
   currentCard.pending.push(step);
   scrollFeed();
 }
@@ -679,7 +721,7 @@ function updateFooter(step, cost) {
   }
   const stepNumber = Number(step || 0);
   currentCard.refs.foot.textContent =
-    `Шаг ${stepNumber} из ${state.maxSteps} · ${formatCost(cost || 0)}`;
+    `Шаг ${stepNumber} · до ${state.maxSteps} · ${formatCost(cost || 0)}`;
 }
 
 function finishPending(status = "success") {
@@ -696,6 +738,30 @@ function handleEvent(event) {
   if (!currentCard) {
     return;
   }
+  if (event.type === "pulse") {
+    state.lastPulseAt = Date.now();
+    hideStall();
+    updateLive(event);
+    return;
+  }
+  if (event.type === "thinking") {
+    state.maxSteps = Number(event.max_steps || state.maxSteps || 8);
+    currentCard.refs.stop.hidden = false;
+    updateFooter(event.step, state.cost);
+    return;
+  }
+  if (event.type === "delta") {
+    const text = String(event.text || "");
+    if (!text) {
+      return;
+    }
+    state.streamBuffer += text;
+    currentCard.refs.answer.hidden = false;
+    currentCard.refs.answer.classList.add("streaming");
+    currentCard.refs.answer.textContent = state.streamBuffer;
+    scrollFeed();
+    return;
+  }
   if (event.type === "step") {
     state.maxSteps = Number(event.max_steps || state.maxSteps || 8);
     currentCard.refs.stop.hidden = false;
@@ -704,13 +770,25 @@ function handleEvent(event) {
   }
   if (event.type === "tool") {
     currentCard.refs.stop.hidden = false;
-    addPendingStep(TOOL_LABELS[event.name] || event.name || "Инструмент");
+    addPendingStep(
+      TOOL_LABELS[event.name] || event.name || "Инструмент",
+      String(event.args || ""),
+    );
     return;
   }
   if (event.type === "tool_result") {
     const step = currentCard.pending.shift();
     if (step) {
-      setStepStatus(step, event.ok ? "success" : "error", String(event.summary || ""));
+      const duration = Number(event.duration);
+      if (!Number.isFinite(duration)) {
+        step.duration = (Date.now() - step.startedAt) / 1000;
+      }
+      setStepStatus(
+        step,
+        event.ok ? "success" : "error",
+        String(event.summary || ""),
+        event.duration,
+      );
     }
     scrollFeed();
     return;
@@ -723,6 +801,12 @@ function handleEvent(event) {
     return;
   }
   if (event.type === "confirm") {
+    setTrayState("attention");
+    notifyUser(
+      "Омега ждёт подтверждения",
+      String(event.title || "Нужно ваше решение."),
+      false,
+    );
     openConfirm(event);
     return;
   }
@@ -780,15 +864,39 @@ function finishCard(event) {
   setRunning(false);
 
   const reason = String(event.stopped_reason || "done");
-  finishPending(reason === "cancelled" || reason === "error" ? "error" : "success");
-  currentCard.refs.title.textContent =
-    reason === "done" ? "Готово" : reason === "cancelled" ? "Остановлено" : "Задача завершена";
+  finishPending(
+    reason === "cancelled" || reason === "error" || reason === "interrupted"
+      ? "error"
+      : "success",
+  );
+  const titles = {
+    done: "Готово",
+    cancelled: "Остановлено",
+    daily_limit: "Дневной лимит",
+    interrupted: "Прервано",
+    error: "Ошибка",
+  };
+  currentCard.refs.title.textContent = titles[reason] || "Задача завершена";
   currentCard.refs.stop.hidden = true;
+  currentCard.refs.answer.classList.remove("streaming");
 
   const cost = Number(event.cost || state.cost || 0);
   const steps = Number(event.steps || 0);
   currentCard.refs.foot.textContent =
-    `Шаг ${steps} из ${state.maxSteps} · ${formatCost(cost)}`;
+    `Шаг ${steps} · до ${state.maxSteps} · ${formatCost(cost)}`;
+
+  const taskSeconds = (Date.now() - state.cardStartedAt) / 1000;
+  if (reason === "daily_limit") {
+    notifyUser("Дневной лимит", "Омега остановилась: дневной лимит израсходован.", false);
+    showToast("Дневной лимит израсходован.", {
+      label: "Продолжить",
+      run: () => submitTask({ overBudget: true }),
+    });
+  } else if (reason === "done" || reason === "max_steps") {
+    if (liveness().shouldNotify({ windowHidden: document.hidden, taskSeconds })) {
+      notifyUser("Омега закончила", String(event.answer || "").slice(0, 180), false);
+    }
+  }
 
   if (event.chat_id) {
     state.chatId = String(event.chat_id);
@@ -803,8 +911,9 @@ function finishCard(event) {
   currentCard.refs.answer.hidden = false;
   currentCard.refs.answer.classList.toggle(
     "error",
-    reason !== "done" && reason !== "max_steps",
+    reason !== "done" && reason !== "max_steps" && reason !== "daily_limit",
   );
+  currentCard.refs.answer.classList.toggle("daily-limit", reason === "daily_limit");
   if (reason === "done" || reason === "max_steps") {
     renderMarkdown(currentCard.refs.answer, answer);
     speakAnswer(answer);
@@ -840,21 +949,139 @@ function failCard(card, message) {
   state.running = false;
   setRunning(false);
   currentCard = null;
+  setTrayState("attention");
   scrollFeed();
+}
+
+function liveness() {
+  return (
+    window.OmegaLiveness || {
+      isStalled: () => false,
+      formatElapsed: (seconds) => `${Math.max(0, Math.floor(seconds || 0))} с`,
+      shouldNotify: ({ windowHidden, taskSeconds, minSeconds }) =>
+        Boolean(windowHidden) || Number(taskSeconds || 0) >= Number(minSeconds || 25),
+    }
+  );
+}
+
+function setLivePill(text) {
+  if (!text) {
+    els.liveStatus.hidden = true;
+    return;
+  }
+  els.liveText.textContent = text;
+  els.liveStatus.hidden = false;
+}
+
+function hideStall() {
+  els.stallBanner.hidden = true;
+}
+
+function showStall(seconds) {
+  const threshold = state.stallSeconds;
+  els.stallText.textContent =
+    `Кажется, завис: сигналов нет ${seconds} с (порог ${threshold} с). ` +
+    "Можно подождать, остановить или повторить задачу.";
+  els.stallBanner.hidden = false;
+}
+
+function updateLive(event) {
+  if (!state.running) {
+    return;
+  }
+  const elapsed = Number(event?.elapsed ?? (Date.now() - state.cardStartedAt) / 1000);
+  const step = Number(event?.step || 0);
+  const tool = String(event?.tool || "");
+  const parts = [`Работаю… ${liveness().formatElapsed(elapsed)}`];
+  if (step) {
+    parts.push(`шаг ${step} из ${state.maxSteps}`);
+  }
+  if (tool) {
+    const label = TOOL_LABELS[tool] || tool;
+    const seconds = Number(event?.tool_seconds || 0);
+    parts.push(seconds ? `${label} · ${seconds} с` : label);
+  }
+  setLivePill(parts.join(" · "));
+}
+
+function startWatchdog() {
+  stopWatchdog();
+  state.cardStartedAt = Date.now();
+  state.lastPulseAt = Date.now();
+  hideStall();
+  updateLive({ elapsed: 0, step: 0, tool: "" });
+  state.watchdog = window.setInterval(() => {
+    if (!state.running) {
+      stopWatchdog();
+      return;
+    }
+    updateLive({ elapsed: (Date.now() - state.cardStartedAt) / 1000 });
+    const seconds = Math.floor((Date.now() - state.lastPulseAt) / 1000);
+    if (liveness().isStalled(Date.now(), state.lastPulseAt, state.running, state.stallSeconds)) {
+      showStall(seconds);
+    } else {
+      hideStall();
+    }
+  }, 1000);
+}
+
+function stopWatchdog() {
+  if (state.watchdog) {
+    window.clearInterval(state.watchdog);
+    state.watchdog = null;
+  }
+  setLivePill("");
+  hideStall();
+}
+
+function setTrayState(value) {
+  if (window.omega?.trayState) {
+    window.omega.trayState(value).catch(() => {});
+  }
+}
+
+function notifyUser(title, body, force = false) {
+  if (!window.omega?.notify) {
+    return;
+  }
+  window.omega.notify({ title, body, force }).catch(() => {});
 }
 
 function setRunning(running) {
   els.send.disabled = running;
   els.mic.disabled = running;
   els.newTask.disabled = false;
+  if (running) {
+    startWatchdog();
+    setTrayState("working");
+  } else {
+    stopWatchdog();
+    setTrayState("idle");
+  }
 }
 
-async function streamTask(task, attachments = []) {
+async function streamTask(task, attachments = [], overBudget = false) {
   const response = await fetch(api("/api/task"), {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ task, chat_id: state.chatId, attachments }),
+    body: JSON.stringify({ task, chat_id: state.chatId, attachments, over_budget: overBudget }),
   });
+
+  if (response.status === 409) {
+    try {
+      const data = await response.json();
+      if (data.code === "daily_limit") {
+        const error = new Error(data.error || "Дневной лимит расходов исчерпан.");
+        error.code = "daily_limit";
+        error.data = data;
+        throw error;
+      }
+    } catch (error) {
+      if (error && error.code === "daily_limit") {
+        throw error;
+      }
+    }
+  }
 
   if (!response.ok) {
     let data = {};
@@ -879,16 +1106,21 @@ async function streamTask(task, attachments = []) {
       break;
     }
     buffer += decoder.decode(value, { stream: true });
-    let index = buffer.indexOf("\n\n");
+    let index = buffer.indexOf("\\n\\n");
     while (index >= 0) {
       const block = buffer.slice(0, index);
       buffer = buffer.slice(index + 2);
       parseBlock(block);
-      index = buffer.indexOf("\n\n");
+      index = buffer.indexOf("\\n\\n");
     }
   }
 
+  state.lastPulseAt = Date.now();
+
   if (currentCard && !currentCard.finalReceived) {
+    state.running = false;
+    setRunning(false);
+    failCard(currentCard, "Связь с сервером оборвалась. Нажми «Повторить», если задача нужна.");
     throw new Error("Поток завершился без итогового ответа.");
   }
 }
@@ -910,6 +1142,7 @@ function parseBlock(block) {
     return;
   }
   if (event && event.type !== "ping") {
+    state.lastPulseAt = Date.now();
     handleEvent(event);
   }
 }
@@ -1235,8 +1468,12 @@ async function proposeMemory(text) {
   }
 }
 
-async function submitTask() {
-  const task = els.input.value.trim();
+async function submitTask(options = {}) {
+  let task = els.input.value.trim();
+  if (!task && options.overBudget && state.lastTask) {
+    task = state.lastTask;
+    els.input.value = task;
+  }
   if (!task || state.running) {
     return;
   }
@@ -1258,8 +1495,15 @@ async function submitTask() {
 
   state.running = true;
   state.cost = 0;
+  state.lastTask = task;
+  state.streamBuffer = "";
   setRunning(true);
-  const pendingAttachments = (state.attachments || []).slice();
+  const pendingAttachments = (
+    options.overBudget && !(state.attachments || []).length
+      ? state.lastAttachments
+      : state.attachments || []
+  ).slice();
+  state.lastAttachments = pendingAttachments.slice();
   addUserMessage(task, pendingAttachments);
   els.input.value = "";
   state.attachments = [];
@@ -1268,8 +1512,14 @@ async function submitTask() {
   updateFooter(0, 0);
 
   try {
-    await streamTask(task, pendingAttachments);
+    await streamTask(task, pendingAttachments, Boolean(options.overBudget));
   } catch (error) {
+    if (error.code === "daily_limit") {
+      showToast(error.message, {
+        label: "Продолжить",
+        run: () => submitTask({ overBudget: true }),
+      });
+    }
     failCard(currentCard, error.message || "Не удалось выполнить задачу.");
   } finally {
     if (state.running) {
@@ -1285,6 +1535,7 @@ async function stopTask() {
   }
   if (currentCard) {
     currentCard.refs.stop.disabled = true;
+    currentCard.refs.stop.textContent = "Останавливаю…";
   }
   try {
     await apiJson("/api/stop", { method: "POST", body: "{}" });
@@ -1293,6 +1544,7 @@ async function stopTask() {
     showToast(error.message);
     if (currentCard) {
       currentCard.refs.stop.disabled = false;
+      currentCard.refs.stop.textContent = "Стоп";
     }
   }
 }
@@ -1410,8 +1662,31 @@ async function refreshSummary() {
   try {
     const data = await apiJson("/api/summary");
     state.maxSteps = Number(data.max_steps || 8);
+    state.stallSeconds = Number(data.stall_seconds || state.stallSeconds || 20);
+    state.dailyLimit = Number(data.daily_limit || 0);
     els.budgetValue.textContent = formatRub(data.remaining_rub, 2);
+    if (els.statusServer) {
+      els.statusServer.textContent = "Сервер: работает";
+    }
+    if (els.statusServerLed) {
+      els.statusServerLed.className = "status-led ok";
+    }
+    if (els.statusModel) {
+      els.statusModel.textContent = `Модель: ${data.model_label || data.model || "—"}`;
+    }
+    if (els.statusBudget) {
+      els.statusBudget.textContent = `Бюджет: ${formatRub(data.remaining_rub, 2)} ₽`;
+    }
+    if (els.statusToday) {
+      els.statusToday.textContent = `Сегодня: ${formatRub(data.spent_today, 2)} ₽`;
+    }
   } catch (error) {
+    if (els.statusServer) {
+      els.statusServer.textContent = "Сервер: нет связи";
+    }
+    if (els.statusServerLed) {
+      els.statusServerLed.className = "status-led bad";
+    }
     showToast(`Не удалось загрузить историю: ${error.message}`);
   }
 }
@@ -2287,6 +2562,7 @@ function applySettingsToUi() {
   if (!state.settings) {
     return;
   }
+  const settings = state.settings;
   if (!state.recordingHotkey) {
     els.hotkeyInput.value = formatHotkey(state.settings.hotkey);
   }
@@ -2325,6 +2601,23 @@ function applySettingsToUi() {
   els.memoryToggle.classList.toggle("on", memoryEnabled);
   if (document.activeElement !== els.memoryLimitInput) {
     els.memoryLimitInput.value = String(state.settings.memory_send_limit ?? 4000);
+  }
+  if (els.dailyLimitInput && document.activeElement !== els.dailyLimitInput) {
+    els.dailyLimitInput.value = String(state.settings.daily_limit_rub ?? 0);
+  }
+  if (els.stallInput && document.activeElement !== els.stallInput) {
+    els.stallInput.value = String(state.settings.stall_seconds ?? 20);
+  }
+  if (els.modelTimeoutInput && document.activeElement !== els.modelTimeoutInput) {
+    els.modelTimeoutInput.value = String(state.settings.model_timeout ?? 60);
+  }
+  if (els.toolTimeoutInput && document.activeElement !== els.toolTimeoutInput) {
+    els.toolTimeoutInput.value = String(state.settings.tool_timeout ?? 30);
+  }
+  if (els.streamToggle) {
+    const enabled = state.settings.stream_enabled !== false;
+    els.streamToggle.setAttribute("aria-checked", String(enabled));
+    els.streamToggle.classList.toggle("on", enabled);
   }
   const commandConfirm = state.settings.command_confirm !== false;
   els.commandConfirmToggle.setAttribute("aria-checked", String(commandConfirm));
@@ -2671,6 +2964,106 @@ async function saveMemoryLimit() {
   }
   state.settingsBusy = true;
   const ok = await saveSettingsPatch({ memory_send_limit: limit });
+  state.settingsBusy = false;
+  if (!ok) {
+    applySettingsToUi();
+  }
+}
+
+async function saveDailyLimit() {
+  if (!state.settings || state.settingsBusy) {
+    return;
+  }
+  const value = Number(els.dailyLimitInput.value);
+  if (!Number.isFinite(value)) {
+    applySettingsToUi();
+    return;
+  }
+  const limit = Math.max(0, Math.min(1000000, Math.round(value * 100) / 100));
+  if (limit === state.settings.daily_limit_rub) {
+    return;
+  }
+  state.settingsBusy = true;
+  const ok = await saveSettingsPatch({ daily_limit_rub: limit });
+  state.settingsBusy = false;
+  if (!ok) {
+    applySettingsToUi();
+  }
+}
+
+async function saveStallSeconds() {
+  if (!state.settings || state.settingsBusy) {
+    return;
+  }
+  const value = Number(els.stallInput.value);
+  if (!Number.isFinite(value)) {
+    applySettingsToUi();
+    return;
+  }
+  const limit = Math.max(5, Math.min(120, Math.round(value)));
+  if (limit === state.settings.stall_seconds) {
+    return;
+  }
+  state.settingsBusy = true;
+  const ok = await saveSettingsPatch({ stall_seconds: limit });
+  state.settingsBusy = false;
+  if (ok) {
+    state.stallSeconds = limit;
+  } else {
+    applySettingsToUi();
+  }
+}
+
+async function saveModelTimeout() {
+  if (!state.settings || state.settingsBusy) {
+    return;
+  }
+  const value = Number(els.modelTimeoutInput.value);
+  if (!Number.isFinite(value)) {
+    applySettingsToUi();
+    return;
+  }
+  const limit = Math.max(5, Math.min(600, Math.round(value)));
+  if (limit === state.settings.model_timeout) {
+    return;
+  }
+  state.settingsBusy = true;
+  const ok = await saveSettingsPatch({ model_timeout: limit });
+  state.settingsBusy = false;
+  if (!ok) {
+    applySettingsToUi();
+  }
+}
+
+async function saveToolTimeout() {
+  if (!state.settings || state.settingsBusy) {
+    return;
+  }
+  const value = Number(els.toolTimeoutInput.value);
+  if (!Number.isFinite(value)) {
+    applySettingsToUi();
+    return;
+  }
+  const limit = Math.max(5, Math.min(600, Math.round(value)));
+  if (limit === state.settings.tool_timeout) {
+    return;
+  }
+  state.settingsBusy = true;
+  const ok = await saveSettingsPatch({ tool_timeout: limit });
+  state.settingsBusy = false;
+  if (!ok) {
+    applySettingsToUi();
+  }
+}
+
+async function toggleStream() {
+  if (!state.settings || state.settingsBusy) {
+    return;
+  }
+  state.settingsBusy = true;
+  const ok = await saveSettingsPatch({
+    stream_enabled: !(state.settings.stream_enabled !== false),
+  });
   state.settingsBusy = false;
   if (!ok) {
     applySettingsToUi();
@@ -3104,6 +3497,25 @@ function bindEvents() {
   els.speechVolume.addEventListener("change", saveSpeechRange);
   els.speakStop.addEventListener("click", stopSpeaking);
   els.clipboardBtn.addEventListener("click", takeFromClipboard);
+  if (els.stallWait) {
+    els.stallWait.addEventListener("click", () => {
+      hideStall();
+      state.lastPulseAt = Date.now();
+    });
+  }
+  if (els.stallStop) {
+    els.stallStop.addEventListener("click", () => stopTask());
+  }
+  if (els.stallRetry) {
+    els.stallRetry.addEventListener("click", async () => {
+      hideStall();
+      if (state.running) {
+        await stopTask();
+      }
+      els.input.value = state.lastTask || els.input.value;
+      await submitTask({ overBudget: false });
+    });
+  }
   els.attachBtn.addEventListener("click", handleAttachClick);
   els.attachInput.addEventListener("change", async (event) => {
     await addFiles(event.target.files);
@@ -3144,6 +3556,21 @@ function bindEvents() {
   els.memoryToggle.addEventListener("click", toggleMemoryEnabled);
   els.memoryLimitInput.addEventListener("change", saveMemoryLimit);
   els.commandConfirmToggle.addEventListener("click", toggleCommandConfirm);
+  if (els.dailyLimitInput) {
+    els.dailyLimitInput.addEventListener("change", saveDailyLimit);
+  }
+  if (els.stallInput) {
+    els.stallInput.addEventListener("change", saveStallSeconds);
+  }
+  if (els.modelTimeoutInput) {
+    els.modelTimeoutInput.addEventListener("change", saveModelTimeout);
+  }
+  if (els.toolTimeoutInput) {
+    els.toolTimeoutInput.addEventListener("change", saveToolTimeout);
+  }
+  if (els.streamToggle) {
+    els.streamToggle.addEventListener("click", toggleStream);
+  }
   els.memoryClear.addEventListener("click", clearMemory);
   els.memoryExport.addEventListener("click", exportMemory);
   els.launchToggle.addEventListener("click", toggleLaunchWithoutConfirm);
@@ -3230,6 +3657,34 @@ function bindEvents() {
 
   window.omega.onOpenSettings(openSettings);
   window.omega.onSettingsChanged(handleSettingsChanged);
+  if (window.omega.onServerStatus) {
+    window.omega.onServerStatus((payload) => {
+      if (!payload || typeof payload !== "object") {
+        return;
+      }
+      const status = String(payload.status || "");
+      if (status === "restarting") {
+        if (els.statusServer) {
+          els.statusServer.textContent = "Сервер: перезапускается…";
+        }
+        if (els.statusServerLed) {
+          els.statusServerLed.className = "status-led busy";
+        }
+        showToast(String(payload.message || "Сервер перезапускается…"));
+      } else if (status === "ready") {
+        refreshSummary();
+        showToast(String(payload.message || "Сервер снова работает."));
+      } else if (status === "failed") {
+        if (els.statusServer) {
+          els.statusServer.textContent = "Сервер: не работает";
+        }
+        if (els.statusServerLed) {
+          els.statusServerLed.className = "status-led bad";
+        }
+        showToast(String(payload.message || "Сервер не работает."));
+      }
+    });
+  }
 }
 
 async function init() {
@@ -3252,6 +3707,7 @@ async function init() {
       const settings = await window.omega.getSettings();
       if (settings) {
         state.settings = settings;
+        state.stallSeconds = Number(settings.stall_seconds || state.stallSeconds || 20);
         applySettingsToUi();
       }
     } catch {
@@ -3259,6 +3715,9 @@ async function init() {
     }
     await refreshSummary();
     await loadChats();
+    state.statusTimer = window.setInterval(() => {
+      refreshSummary().catch(() => {});
+    }, 30000);
     els.input.focus();
   } catch (error) {
     const card = createAssistantCard("Ошибка запуска");

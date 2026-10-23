@@ -73,6 +73,7 @@ MODEL_CAPS: dict[str, dict[str, object]] = {
         "tools": True,
         "multi_turn": True,
         "vision": True,
+        "stream": True,
         "warning": "",
     },
     "deepseek-v4.1-flash": {
@@ -80,6 +81,7 @@ MODEL_CAPS: dict[str, dict[str, object]] = {
         "tools": True,
         "multi_turn": True,
         "vision": True,
+        "stream": True,
         "warning": "",
     },
     "glm-5.3-flash": {
@@ -87,6 +89,7 @@ MODEL_CAPS: dict[str, dict[str, object]] = {
         "tools": True,
         "multi_turn": True,
         "vision": True,
+        "stream": True,
         "warning": "",
     },
     "gpt-6-luna": {
@@ -94,6 +97,7 @@ MODEL_CAPS: dict[str, dict[str, object]] = {
         "tools": True,
         "multi_turn": True,
         "vision": True,
+        "stream": True,
         "warning": "",
     },
 }
@@ -192,6 +196,51 @@ YANDEX_REGION = (
 MAX_STEPS = int(os.environ.get("MAX_STEPS", "8"))
 MAX_TOKENS_PER_REPLY = int(os.environ.get("MAX_TOKENS_PER_REPLY", "2500"))
 MAX_TASK_TOKENS = int(os.environ.get("MAX_TASK_TOKENS", "40000"))
+
+
+def _number_setting(name: str, default: float, env_names: tuple[str, ...] = ()) -> float:
+    """Число из окружения или data/settings.json. Ошибки не ломают задачу."""
+    for env_name in env_names:
+        raw = os.environ.get(env_name)
+        if raw not in (None, ""):
+            try:
+                return float(raw)
+            except ValueError:
+                pass
+    value = load_settings().get(name)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def current_stall_seconds() -> int:
+    """Сколько секунд без сигналов считать зависанием."""
+    return max(5, int(_number_setting("stall_seconds", 20, ("OMEGA_STALL_SECONDS",))))
+
+
+def current_model_timeout() -> int:
+    """Таймаут одного запроса к модели."""
+    return max(5, int(_number_setting("model_timeout", 60, ("OMEGA_MODEL_TIMEOUT",))))
+
+
+def current_tool_timeout() -> int:
+    """Таймаут одного инструмента."""
+    return max(5, int(_number_setting("tool_timeout", 30, ("OMEGA_TOOL_TIMEOUT",))))
+
+
+def current_daily_limit() -> float:
+    """Дневной лимит расходов в рублях. 0 — без дневного лимита."""
+    value = _number_setting("daily_limit_rub", 0, ("OMEGA_DAILY_LIMIT_RUB",))
+    return max(0.0, value)
+
+
+def current_stream_enabled() -> bool:
+    """Потоковый вывод ответа: включается настройкой и возможностями модели."""
+    raw = os.environ.get("OMEGA_STREAM")
+    if raw not in (None, ""):
+        return raw.strip().lower() not in ("0", "false", "no", "off")
+    return load_settings().get("stream_enabled") is not False
 
 # --- Инструменты ---
 MAX_FETCH_CHARS = int(os.environ.get("MAX_FETCH_CHARS", "6000"))

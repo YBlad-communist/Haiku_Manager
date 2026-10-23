@@ -11,6 +11,13 @@ contextBridge.exposeInMainWorld("omega", {
   saveSettings: (patch) => ipcRenderer.invoke("omega:save-settings", patch),
   getPromptInfo: () => ipcRenderer.invoke("omega:prompt-info"),
   readClipboard: () => ipcRenderer.invoke("omega:clipboard-read"),
+  trayState: (state) => ipcRenderer.invoke("omega:tray-state", state),
+  notify: (payload) => ipcRenderer.invoke("omega:notify", payload),
+  onServerStatus: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on("server-status", handler);
+    return () => ipcRenderer.removeListener("server-status", handler);
+  },
   onFocusInput: (callback) => {
     const handler = () => callback();
     ipcRenderer.on("focus-input", handler);

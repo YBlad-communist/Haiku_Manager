@@ -12,6 +12,10 @@
   --process: #FFD9C2;
   --process-ink: #C2561F;
   --danger-ink: #8A2B2B;
+  --danger-bg: #FFD6D6;
+  --warn-bg: #FFF0D6;
+  --warn-ink: #7A5410;
+  --ok-ink: #1F7A5C;
   --card-shadow: 10px 10px 24px rgba(120, 105, 190, .22),
     -8px -8px 20px rgba(255, 255, 255, .9),
     inset 2px 2px 4px rgba(255, 255, 255, .8);
@@ -33,7 +37,11 @@
   --success-ink: #7FE3C3;
   --process: #5A3220;
   --process-ink: #FFB48A;
-  --danger-ink: #FF9D9D;
+  --danger-ink: #FFD6D6;
+  --danger-bg: #4A2020;
+  --warn-bg: #4A3A1C;
+  --warn-ink: #FFD9A0;
+  --ok-ink: #7FE3C3;
   --card-shadow: 12px 12px 26px rgba(4, 3, 10, .55),
     -8px -8px 20px rgba(66, 58, 104, .22),
     inset 2px 2px 4px rgba(255, 255, 255, .04);
@@ -1629,8 +1637,158 @@ textarea.draft {
   background-clip: content-box;
 }
 
+/* Живость: пульс задачи, полоса зависания и строка состояния. */
+
+.live-pill {
+  display: flex;
+  flex: 0 0 auto;
+  align-self: flex-start;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 14px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.live-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 1.1s ease-in-out infinite;
+}
+
+.stall-banner {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: 18px;
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+  box-shadow: var(--inset-shadow);
+}
+
+.stall-text {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.stall-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.stall-actions .btn {
+  padding: 7px 12px;
+  color: var(--warn-ink);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.stall-stop {
+  color: var(--danger-ink);
+  background: var(--danger-bg);
+  box-shadow: none;
+}
+
+.status-bar {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 16px;
+  padding: 8px 14px;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.status-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.status-led {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.status-led.ok {
+  background: var(--ok-ink);
+}
+
+.status-led.bad {
+  background: var(--danger-ink);
+}
+
+.status-led.busy {
+  background: var(--accent);
+  animation: pulse 1.1s ease-in-out infinite;
+}
+
+.step-note {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.step-details {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.step-details summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.step-details pre {
+  margin: 4px 0 0;
+  max-height: 140px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: var(--inset);
+  font-family: inherit;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.answer.streaming::after {
+  content: "▍";
+  color: var(--accent);
+  animation: pulse 1s ease-in-out infinite;
+}
+
+.answer.error,
+.answer.daily-limit {
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: var(--danger-bg);
+  color: var(--danger-ink);
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .dot {
+  .dot,
+  .live-dot,
+  .status-led.busy,
+  .answer.streaming::after {
     animation: none;
     opacity: 1;
   }
